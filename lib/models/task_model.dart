@@ -1,6 +1,7 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
 const Object _taskReminderUnset = Object();
+const Object _taskCompletedAtUnset = Object();
 
 class TaskModel {
   final String id;
@@ -9,8 +10,11 @@ class TaskModel {
   final bool isCompleted;
   final DateTime? reminderAt;
   final DateTime createdAt;
+  final DateTime updatedAt;
+  final DateTime? completedAt;
   final String categoryId;
   final String categoryName;
+  final int sortOrder;
 
   TaskModel({
     required this.id,
@@ -19,8 +23,11 @@ class TaskModel {
     this.isCompleted = false,
     this.reminderAt,
     required this.createdAt,
+    required this.updatedAt,
+    this.completedAt,
     this.categoryId = 'misc',
     this.categoryName = 'Misc',
+    this.sortOrder = 0,
   });
 
   Map<String, dynamic> toMap() {
@@ -31,8 +38,11 @@ class TaskModel {
       'isCompleted': isCompleted,
       'reminderAt': reminderAt != null ? Timestamp.fromDate(reminderAt!) : null,
       'createdAt': Timestamp.fromDate(createdAt),
+      'updatedAt': Timestamp.fromDate(updatedAt),
+      'completedAt': completedAt != null ? Timestamp.fromDate(completedAt!) : null,
       'categoryId': categoryId,
       'categoryName': categoryName,
+      'sortOrder': sortOrder,
     };
   }
 
@@ -44,8 +54,11 @@ class TaskModel {
       'isCompleted': isCompleted,
       'reminderAt': reminderAt?.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
+      'updatedAt': updatedAt.toIso8601String(),
+      'completedAt': completedAt?.toIso8601String(),
       'categoryId': categoryId,
       'categoryName': categoryName,
+      'sortOrder': sortOrder,
     };
   }
 
@@ -57,8 +70,13 @@ class TaskModel {
       isCompleted: map['isCompleted'] ?? false,
       reminderAt: _readDate(map['reminderAt']),
       createdAt: _readDate(map['createdAt']) ?? DateTime.now(),
+      updatedAt: _readDate(map['updatedAt']) ?? _readDate(map['createdAt']) ?? DateTime.now(),
+      completedAt: _readDate(map['completedAt']),
       categoryId: map['categoryId'] ?? 'misc',
       categoryName: map['categoryName'] ?? 'Misc',
+      sortOrder: (map['sortOrder'] ?? 0) is int
+          ? map['sortOrder'] ?? 0
+          : int.tryParse('${map['sortOrder']}') ?? 0,
     );
   }
 
@@ -73,8 +91,11 @@ class TaskModel {
     bool? isCompleted,
     Object? reminderAt = _taskReminderUnset,
     DateTime? createdAt,
+    DateTime? updatedAt,
+    Object? completedAt = _taskCompletedAtUnset,
     String? categoryId,
     String? categoryName,
+    int? sortOrder,
   }) {
     return TaskModel(
       id: id ?? this.id,
@@ -85,8 +106,13 @@ class TaskModel {
           ? this.reminderAt
           : reminderAt as DateTime?,
       createdAt: createdAt ?? this.createdAt,
+      updatedAt: updatedAt ?? this.updatedAt,
+      completedAt: identical(completedAt, _taskCompletedAtUnset)
+          ? this.completedAt
+          : completedAt as DateTime?,
       categoryId: categoryId ?? this.categoryId,
       categoryName: categoryName ?? this.categoryName,
+      sortOrder: sortOrder ?? this.sortOrder,
     );
   }
 

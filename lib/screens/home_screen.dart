@@ -1,7 +1,15 @@
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
+import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
 import '../constants/app_colors.dart';
@@ -10,11 +18,14 @@ import '../models/note_model.dart';
 import '../providers/auth_provider.dart';
 import '../providers/note_provider.dart';
 import '../services/notification_service.dart';
+import '../services/export_service.dart';
 import '../services/security_service.dart';
 import '../widgets/note_card.dart';
+import '../widgets/note_fab_menu.dart';
 import '../widgets/note_unlock_dialog.dart';
 import 'auth/login_screen.dart';
 import 'auth/register_screen.dart';
+import 'drawing_screen.dart';
 import 'note_editor_screen.dart';
 import 'settings_screen.dart';
 import 'task_screen.dart';
@@ -39,15 +50,12 @@ class _HomeScreenState extends State<HomeScreen> {
   @override
   void initState() {
     super.initState();
-
     WidgetsBinding.instance.addPostFrameCallback((_) async {
       if (!mounted) return;
-
       final auth = context.read<AuthProvider>();
       if (!auth.isLoggedIn && !auth.isGuest) {
         auth.continueAsGuest();
       }
-
       await context.read<NoteProvider>().loadNotes();
       await NotificationService.requestPermissions();
     });
@@ -65,11 +73,6 @@ class _HomeScreenState extends State<HomeScreen> {
         : noteProvider.searchNotes(_searchQuery);
   }
 
-  List<NoteModel> _currentSelectedNotes(NoteProvider noteProvider) {
-    final visible = _currentVisibleNotes(noteProvider);
-    return visible.where((e) => _selectedNoteIds.contains(e.id)).toList();
-  }
-
   void _toggleSelection(NoteModel note) {
     setState(() {
       if (_selectedNoteIds.contains(note.id)) {
@@ -81,9 +84,7 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   void _clearSelection() {
-    setState(() {
-      _selectedNoteIds.clear();
-    });
+    setState(() => _selectedNoteIds.clear());
   }
 
   Future<void> _handleNoteTap(NoteModel note) async {
@@ -91,15 +92,12 @@ class _HomeScreenState extends State<HomeScreen> {
       _toggleSelection(note);
       return;
     }
-
     await _openNote(note);
   }
 
   void _handleNoteLongPress(NoteModel note) {
     if (_selectedNoteIds.contains(note.id)) return;
-    setState(() {
-      _selectedNoteIds.add(note.id);
-    });
+    setState(() => _selectedNoteIds.add(note.id));
   }
 
   Future<void> _openNote(NoteModel note) async {
@@ -132,14 +130,10 @@ class _HomeScreenState extends State<HomeScreen> {
     }
 
     if (!mounted) return;
-
     await Navigator.push(
       context,
       MaterialPageRoute(
-        builder: (_) => NoteEditorScreen(
-          note: note,
-          isNew: false,
-        ),
+        builder: (_) => NoteEditorScreen(note: note, isNew: false),
       ),
     );
 
@@ -147,64 +141,226 @@ class _HomeScreenState extends State<HomeScreen> {
     await context.read<NoteProvider>().loadNotes();
   }
 
-  Future<void> _createNewNote() async {
+  NoteModel _blankNote({String? content, String? coverImageUrl}) {
     final noteProvider = context.read<NoteProvider>();
     final auth = context.read<AuthProvider>();
-
     final uid = auth.user?.uid ?? 'guest';
     final now = DateTime.now();
     final currentFolder = noteProvider.selectedFolderId;
     final targetFolderId =
-    (currentFolder == 'trash' || currentFolder == 'locked')
-        ? 'all'
-        : currentFolder;
+        (currentFolder == 'trash' || currentFolder == 'locked') ? 'all' : currentFolder;
 
-    final tempNote = NoteModel(
+    return NoteModel(
       id: const Uuid().v4(),
       title: '',
-      content: '[]',
+      content: content ?? '[]',
+      coverImageUrl: coverImageUrl,
       folderId: targetFolderId,
       userId: uid,
       createdAt: now,
       updatedAt: now,
     );
+  }
 
+  Future<File> _persistAudioLocally(String tempPath) async {
+    final docsDir = await getApplicationDocumentsDirectory();
+    final voiceDir = Directory('${docsDir.path}/voice_notes');
+    if (!await voiceDir.exists()) {
+      await voiceDir.create(recursive: true);
+    }
+
+    final ext = tempPath.contains('.') ? tempPath.split('.').last : 'm4a';
+    final savedPath = '${voiceDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.$ext';
+    final sourceFile = File(tempPath);
+    return sourceFile.copy(savedPath);
+  }
+
+  Future<void> _createTextNote() async {
+    final note = _blankNote();
     if (!mounted) return;
-
     await Navigator.push(
       context,
-      MaterialPageRoute(
-        builder: (_) => NoteEditorScreen(
-          note: tempNote,
-          isNew: true,
-        ),
-      ),
+      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
+    );
+    if (!mounted) return;
+    await context.read<NoteProvider>().loadNotes();
+  }
+
+  Future<void> _createImageNote() async {
+    final picker = ImagePicker();
+    final image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
+    if (image == null) return;
+    final bytes = await image.readAsBytes();
+    final base64Str = base64Encode(bytes);
+    final dataUrl = 'data:image/jpeg;base64,$base64Str';
+    final content = jsonEncode([
+      {'insert': {'image': dataUrl}},
+      {'insert': '\n'},
+    ]);
+    final note = _blankNote(content: content, coverImageUrl: dataUrl);
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
+    );
+    if (!mounted) return;
+    await context.read<NoteProvider>().loadNotes();
+  }
+
+  Future<void> _createDrawingNote() async {
+    final Uint8List? imageBytes = await Navigator.push<Uint8List>(
+      context,
+      MaterialPageRoute(builder: (_) => const DrawingScreen()),
+    );
+    if (imageBytes == null) return;
+    final dataUrl = 'data:image/png;base64,${base64Encode(imageBytes)}';
+    final content = jsonEncode([
+      {'insert': {'image': dataUrl}},
+      {'insert': '\n'},
+    ]);
+    final note = _blankNote(content: content, coverImageUrl: dataUrl);
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
+    );
+    if (!mounted) return;
+    await context.read<NoteProvider>().loadNotes();
+  }
+
+  Future<void> _createAudioNote() async {
+    final recorder = AudioRecorder();
+    final hasPermission = await recorder.hasPermission();
+    if (!hasPermission) return;
+
+    if (!mounted) return;
+    String? audioPath;
+    await showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (sheetContext) {
+        bool recording = false;
+        Duration elapsed = Duration.zero;
+        final timerNotifier = ValueNotifier<int>(0);
+        Timer? timer;
+
+        Future<void> start() async {
+          final dir = await getTemporaryDirectory();
+          final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
+          await recorder.start(const RecordConfig(), path: path);
+          recording = true;
+          audioPath = path;
+          timer = Timer.periodic(const Duration(seconds: 1), (_) {
+            elapsed += const Duration(seconds: 1);
+            timerNotifier.value++;
+          });
+        }
+
+        Future<void> stop() async {
+          timer?.cancel();
+          await recorder.stop();
+          if (sheetContext.mounted) Navigator.pop(sheetContext);
+        }
+
+        return StatefulBuilder(builder: (context, setSheetState) {
+          return Container(
+            decoration: BoxDecoration(
+              color: AppColors.bg2(context),
+              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
+            ),
+            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
+            child: ValueListenableBuilder<int>(
+              valueListenable: timerNotifier,
+              builder: (_, __, ___) {
+                final mm = elapsed.inMinutes.toString().padLeft(2, '0');
+                final ss = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
+                return Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text('Rekam audio', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700)),
+                    const SizedBox(height: 16),
+                    Text('$mm:$ss', style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.w800)),
+                    const SizedBox(height: 20),
+                    Row(
+                      children: [
+                        Expanded(
+                          child: OutlinedButton(
+                            onPressed: () async {
+                              timer?.cancel();
+                              if (recording) await recorder.stop();
+                              if (sheetContext.mounted) Navigator.pop(sheetContext);
+                            },
+                            child: const Text('Batal'),
+                          ),
+                        ),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: FilledButton(
+                            onPressed: () async {
+                              if (!recording) {
+                                await start();
+                                setSheetState(() {});
+                              } else {
+                                await stop();
+                              }
+                            },
+                            child: Text(recording ? 'Selesai' : 'Mulai'),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ],
+                );
+              },
+            ),
+          );
+        });
+      },
     );
 
+    if (audioPath == null) return;
+
+    final savedAudio = await _persistAudioLocally(audioPath!);
+    try {
+      final tempFile = File(audioPath!);
+      if (await tempFile.exists()) {
+        await tempFile.delete();
+      }
+    } catch (_) {}
+
+    final content = jsonEncode([
+      {
+        'insert': {
+          'notes-audio': savedAudio.path,
+          'duration': 60,
+        }
+      },
+      {'insert': '\n'},
+    ]);
+    final note = _blankNote(content: content);
+    if (!mounted) return;
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
+    );
     if (!mounted) return;
     await context.read<NoteProvider>().loadNotes();
   }
 
   Future<void> _selectDrawerFolder(String folderId) async {
     final noteProvider = context.read<NoteProvider>();
-
     _clearSelection();
     setState(() => _currentTab = 0);
     noteProvider.setFolder(folderId);
-
     Navigator.pop(context);
-
-    if (!mounted) return;
-    setState(() {});
+    if (mounted) setState(() {});
   }
 
   Future<void> _openLockedFromDrawer() async {
     final noteProvider = context.read<NoteProvider>();
-
     _clearSelection();
     Navigator.pop(context);
     await Future.delayed(const Duration(milliseconds: 120));
-
     if (!mounted) return;
 
     if (noteProvider.lockedNotes.isEmpty) {
@@ -215,14 +371,10 @@ class _HomeScreenState extends State<HomeScreen> {
 
     final hasPin = await SecurityService.hasPin();
     if (!mounted) return;
-
     if (!hasPin) {
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
-          content: Text(
-            'Atur PIN terlebih dahulu di Pengaturan',
-            style: GoogleFonts.poppins(),
-          ),
+          content: Text('Atur PIN terlebih dahulu di Pengaturan', style: GoogleFonts.poppins()),
           behavior: SnackBarBehavior.floating,
         ),
       );
@@ -242,14 +394,8 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Future<void> _openSettings() async {
     Navigator.pop(context);
-
     if (!mounted) return;
-
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => const SettingsScreen()),
-    );
-
+    await Navigator.push(context, MaterialPageRoute(builder: (_) => const SettingsScreen()));
     if (!mounted) return;
     await context.read<NoteProvider>().loadNotes();
   }
@@ -297,24 +443,17 @@ class _HomeScreenState extends State<HomeScreen> {
                 Text(
                   auth.isLoggedIn
                       ? (auth.user?.displayName?.trim().isNotEmpty == true
-                      ? auth.user!.displayName!
-                      : (auth.user?.email ?? 'Akun'))
+                          ? auth.user!.displayName!
+                          : (auth.user?.email ?? 'Akun'))
                       : 'Mode Guest',
-                  style: GoogleFonts.poppins(
-                    fontSize: 16,
-                    fontWeight: FontWeight.w600,
-                    color: textColor,
-                  ),
+                  style: GoogleFonts.poppins(fontSize: 16, fontWeight: FontWeight.w600, color: textColor),
                 ),
                 const SizedBox(height: 4),
                 Text(
                   auth.isLoggedIn
                       ? (auth.user?.email ?? 'Sudah login')
-                      : 'Masuk untuk sinkronisasi dan backup',
-                  style: GoogleFonts.poppins(
-                    fontSize: 13,
-                    color: subColor,
-                  ),
+                      : 'Semua fitur tetap bisa dipakai. Data guest hanya tersimpan lokal perangkat.',
+                  style: GoogleFonts.poppins(fontSize: 13, color: subColor),
                   textAlign: TextAlign.center,
                 ),
                 const SizedBox(height: 18),
@@ -324,12 +463,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: ElevatedButton(
                       onPressed: () {
                         Navigator.pop(sheetContext);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const LoginScreen(),
-                          ),
-                        );
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const LoginScreen()));
                       },
                       child: const Text('Masuk'),
                     ),
@@ -340,12 +474,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     child: OutlinedButton(
                       onPressed: () {
                         Navigator.pop(sheetContext);
-                        Navigator.push(
-                          context,
-                          MaterialPageRoute(
-                            builder: (_) => const RegisterScreen(),
-                          ),
-                        );
+                        Navigator.push(context, MaterialPageRoute(builder: (_) => const RegisterScreen()));
                       },
                       child: const Text('Daftar'),
                     ),
@@ -363,10 +492,7 @@ class _HomeScreenState extends State<HomeScreen> {
                         if (!mounted) return;
                         ScaffoldMessenger.of(context).showSnackBar(
                           SnackBar(
-                            content: Text(
-                              'Berhasil keluar',
-                              style: GoogleFonts.poppins(),
-                            ),
+                            content: Text('Berhasil keluar', style: GoogleFonts.poppins()),
                             behavior: SnackBarBehavior.floating,
                           ),
                         );
@@ -386,175 +512,9 @@ class _HomeScreenState extends State<HomeScreen> {
   String _accountInitial(AuthProvider auth) {
     final displayName = auth.user?.displayName?.trim() ?? '';
     final email = auth.user?.email?.trim() ?? '';
-
     if (displayName.isNotEmpty) return displayName[0].toUpperCase();
     if (email.isNotEmpty) return email[0].toUpperCase();
     return 'G';
-  }
-
-  Future<void> _deleteSelected(NoteProvider noteProvider) async {
-    final selected = _currentSelectedNotes(noteProvider);
-    if (selected.isEmpty) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: AppColors.bg2(context),
-        title: Text(
-          'Pindahkan ke sampah?',
-          style: GoogleFonts.poppins(
-            color: AppColors.text(context),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        content: Text(
-          '${selected.length} catatan akan dipindahkan ke sampah.',
-          style: GoogleFonts.poppins(
-            color: AppColors.textSecondary(context),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Batal'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text(
-              'Hapus',
-              style: TextStyle(color: Colors.red),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    for (final note in selected) {
-      await noteProvider.deleteNote(note.id);
-    }
-
-    if (!mounted) return;
-
-    _clearSelection();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${selected.length} catatan dipindahkan ke sampah',
-          style: GoogleFonts.poppins(),
-        ),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Future<void> _restoreSelected(NoteProvider noteProvider) async {
-    final selected = _currentSelectedNotes(noteProvider);
-    if (selected.isEmpty) return;
-
-    for (final note in selected) {
-      await noteProvider.restoreNote(note.id);
-    }
-
-    if (!mounted) return;
-
-    _clearSelection();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${selected.length} catatan dipulihkan',
-          style: GoogleFonts.poppins(),
-        ),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Future<void> _deleteSelectedPermanently(NoteProvider noteProvider) async {
-    final selected = _currentSelectedNotes(noteProvider);
-    if (selected.isEmpty) return;
-
-    final confirmed = await showDialog<bool>(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: AppColors.bg2(context),
-        title: Text(
-          'Hapus permanen?',
-          style: GoogleFonts.poppins(
-            color: AppColors.text(context),
-            fontWeight: FontWeight.w600,
-          ),
-        ),
-        content: Text(
-          '${selected.length} catatan akan dihapus permanen dan tidak bisa dipulihkan.',
-          style: GoogleFonts.poppins(
-            color: AppColors.textSecondary(context),
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, false),
-            child: const Text('Batal'),
-          ),
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext, true),
-            child: const Text(
-              'Hapus permanen',
-              style: TextStyle(color: Colors.red),
-            ),
-          ),
-        ],
-      ),
-    );
-
-    if (confirmed != true) return;
-
-    for (final note in selected) {
-      await noteProvider.permanentDelete(note.id);
-    }
-
-    if (!mounted) return;
-
-    _clearSelection();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          '${selected.length} catatan dihapus permanen',
-          style: GoogleFonts.poppins(),
-        ),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
-  }
-
-  Future<void> _togglePinSelected(NoteProvider noteProvider) async {
-    final selected = _currentSelectedNotes(noteProvider);
-    if (selected.isEmpty) return;
-
-    final allPinned = selected.every((n) => n.isPinned);
-    final newValue = !allPinned;
-
-    for (final note in selected) {
-      await noteProvider.saveNote(
-        note.copyWith(isPinned: newValue),
-      );
-    }
-
-    if (!mounted) return;
-
-    _clearSelection();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text(
-          newValue
-              ? '${selected.length} catatan disematkan'
-              : '${selected.length} catatan dilepas dari sematan',
-          style: GoogleFonts.poppins(),
-        ),
-        behavior: SnackBarBehavior.floating,
-      ),
-    );
   }
 
   @override
@@ -564,12 +524,46 @@ class _HomeScreenState extends State<HomeScreen> {
       drawer: _buildDrawer(),
       body: _currentTab == 0 ? _buildNotesTab() : const TaskScreen(),
       floatingActionButton: _currentTab == 0 && !_isSelectionMode
-          ? FloatingActionButton(
-        onPressed: _createNewNote,
-        child: const Icon(Icons.add, size: 28),
-      )
+          ? NoteFabMenu(
+              onText: _createTextNote,
+              onImage: _createImageNote,
+              onDrawing: _createDrawingNote,
+              onAudio: _createAudioNote,
+            )
           : null,
-      bottomNavigationBar: _buildBottomNav(),
+      bottomNavigationBar: Container(
+        decoration: BoxDecoration(
+          color: AppColors.bg2(context),
+          boxShadow: [
+            BoxShadow(
+              color: Colors.black.withValues(alpha: 0.18),
+              blurRadius: 12,
+              offset: const Offset(0, -2),
+            ),
+          ],
+        ),
+        child: BottomNavigationBar(
+          backgroundColor: Colors.transparent,
+          elevation: 0,
+          currentIndex: _currentTab,
+          onTap: (index) {
+            _clearSelection();
+            setState(() => _currentTab = index);
+          },
+          items: const [
+            BottomNavigationBarItem(
+              icon: Icon(Icons.sticky_note_2_outlined),
+              activeIcon: Icon(Icons.sticky_note_2),
+              label: 'Catatan',
+            ),
+            BottomNavigationBarItem(
+              icon: Icon(Icons.check_circle_outline),
+              activeIcon: Icon(Icons.check_circle),
+              label: 'Tugas',
+            ),
+          ],
+        ),
+      ),
     );
   }
 
@@ -593,10 +587,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     backgroundColor: AppColors.primary.withValues(alpha: 0.18),
                     child: Text(
                       _accountInitial(auth),
-                      style: GoogleFonts.poppins(
-                        fontWeight: FontWeight.w700,
-                        color: AppColors.primary,
-                      ),
+                      style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: AppColors.primary),
                     ),
                   ),
                   const SizedBox(width: 12),
@@ -606,10 +597,9 @@ class _HomeScreenState extends State<HomeScreen> {
                       children: [
                         Text(
                           auth.isLoggedIn
-                              ? (auth.user?.displayName?.trim().isNotEmpty ==
-                              true
-                              ? auth.user!.displayName!
-                              : (auth.user?.email ?? 'Akun'))
+                              ? (auth.user?.displayName?.trim().isNotEmpty == true
+                                  ? auth.user!.displayName!
+                                  : (auth.user?.email ?? 'Akun'))
                               : 'Guest',
                           style: GoogleFonts.poppins(
                             fontSize: 15,
@@ -620,13 +610,8 @@ class _HomeScreenState extends State<HomeScreen> {
                           overflow: TextOverflow.ellipsis,
                         ),
                         Text(
-                          auth.isLoggedIn
-                              ? (auth.user?.email ?? 'Sudah login')
-                              : 'Mode tamu',
-                          style: GoogleFonts.poppins(
-                            fontSize: 12,
-                            color: subColor,
-                          ),
+                          auth.isLoggedIn ? (auth.user?.email ?? 'Sudah login') : 'Mode tamu',
+                          style: GoogleFonts.poppins(fontSize: 12, color: subColor),
                         ),
                       ],
                     ),
@@ -645,7 +630,7 @@ class _HomeScreenState extends State<HomeScreen> {
                     onTap: () => _selectDrawerFolder('all'),
                   ),
                   ...noteProvider.visibleFolders.map(
-                        (FolderModel folder) => KeepDrawerTile(
+                    (FolderModel folder) => KeepDrawerTile(
                       icon: Icons.folder_outlined,
                       title: folder.name,
                       selected: noteProvider.selectedFolderId == folder.id,
@@ -657,6 +642,12 @@ class _HomeScreenState extends State<HomeScreen> {
                     title: 'Terkunci',
                     selected: noteProvider.selectedFolderId == 'locked',
                     onTap: _openLockedFromDrawer,
+                  ),
+                  KeepDrawerTile(
+                    icon: Icons.archive_outlined,
+                    title: 'Arsip',
+                    selected: noteProvider.selectedFolderId == 'archive',
+                    onTap: () => _selectDrawerFolder('archive'),
                   ),
                   KeepDrawerTile(
                     icon: Icons.delete_outline,
@@ -682,18 +673,12 @@ class _HomeScreenState extends State<HomeScreen> {
 
   Widget _buildNotesTab() {
     final noteProvider = context.watch<NoteProvider>();
-    final subColor = AppColors.textSecondary(context);
-
     final notes = _currentVisibleNotes(noteProvider);
-    final pinned = notes.where((n) => n.isPinned).toList();
-    final unpinned = notes.where((n) => !n.isPinned).toList();
 
     return SafeArea(
       child: Column(
         children: [
-          _isSelectionMode
-              ? _buildSelectionTopBar(noteProvider)
-              : _buildNormalTopBar(),
+          _isSelectionMode ? _buildSelectionTopBar(noteProvider) : _buildNormalTopBar(),
           const SizedBox(height: 10),
           if (!_isSelectionMode &&
               noteProvider.selectedFolderId == 'trash' &&
@@ -706,36 +691,40 @@ class _HomeScreenState extends State<HomeScreen> {
                   onPressed: () => _showEmptyTrashDialog(context, noteProvider),
                   child: Text(
                     'Kosongkan sampah',
-                    style: GoogleFonts.poppins(
-                      color: Colors.red,
-                      fontSize: 13,
-                    ),
+                    style: GoogleFonts.poppins(color: Colors.red, fontSize: 13),
                   ),
                 ),
               ),
             ),
           Expanded(
             child: noteProvider.isLoading
-                ? const Center(
-              child: CircularProgressIndicator(
-                color: AppColors.primary,
-              ),
-            )
+                ? const Center(child: CircularProgressIndicator(color: AppColors.primary))
                 : notes.isEmpty
-                ? _buildEmptyState(noteProvider.selectedFolderId)
-                : _buildNotesList(noteProvider, notes, pinned, unpinned),
+                    ? _buildEmptyState(noteProvider.selectedFolderId)
+                    : AnimatedSwitcher(
+                        duration: const Duration(milliseconds: 260),
+                        child: MasonryGridView.count(
+                          key: ValueKey('${noteProvider.selectedFolderId}-${notes.length}-${_searchQuery.length}'),
+                          padding: const EdgeInsets.symmetric(horizontal: 16),
+                          crossAxisCount: 2,
+                          mainAxisSpacing: 10,
+                          crossAxisSpacing: 10,
+                          itemCount: notes.length,
+                          itemBuilder: (context, index) {
+                            final note = notes[index];
+                            return NoteCard(
+                              note: note,
+                              viewMode: 'grid',
+                              selected: _selectedNoteIds.contains(note.id),
+                              selectionMode: _isSelectionMode,
+                              onTap: () => _handleNoteTap(note),
+                              onLongPress: () => _handleNoteLongPress(note),
+                              onMoreTap: _isSelectionMode ? null : () => _showNoteOptions(context, note),
+                            );
+                          },
+                        ),
+                      ),
           ),
-          if (_isSelectionMode)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 8),
-              child: Text(
-                '${_selectedNoteIds.length} dipilih',
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: subColor,
-                ),
-              ),
-            ),
         ],
       ),
     );
@@ -759,10 +748,7 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: AppColors.primary.withValues(alpha: 0.18),
                 shape: BoxShape.circle,
               ),
-              child: const Icon(
-                Icons.menu,
-                color: AppColors.primary,
-              ),
+              child: const Icon(Icons.menu, color: AppColors.primary),
             ),
           ),
           const SizedBox(width: 10),
@@ -777,26 +763,20 @@ class _HomeScreenState extends State<HomeScreen> {
               child: TextField(
                 controller: _searchController,
                 onChanged: (val) => setState(() => _searchQuery = val),
-                style: GoogleFonts.poppins(
-                  color: textColor,
-                  fontSize: 14,
-                ),
+                style: GoogleFonts.poppins(color: textColor, fontSize: 14),
                 decoration: InputDecoration(
-                  hintText: 'Cari catatan',
-                  hintStyle: GoogleFonts.poppins(
-                    color: subColor,
-                    fontSize: 14,
-                  ),
+                  hintText: 'Search Keep',
+                  hintStyle: GoogleFonts.poppins(color: subColor, fontSize: 14),
                   border: InputBorder.none,
                   prefixIcon: Icon(Icons.search, color: subColor),
                   suffixIcon: _searchQuery.isNotEmpty
                       ? IconButton(
-                    icon: Icon(Icons.close, color: subColor),
-                    onPressed: () {
-                      _searchController.clear();
-                      setState(() => _searchQuery = '');
-                    },
-                  )
+                          icon: Icon(Icons.close, color: subColor),
+                          onPressed: () {
+                            _searchController.clear();
+                            setState(() => _searchQuery = '');
+                          },
+                        )
                       : null,
                 ),
               ),
@@ -810,10 +790,7 @@ class _HomeScreenState extends State<HomeScreen> {
               backgroundColor: AppColors.primary.withValues(alpha: 0.18),
               child: Text(
                 _accountInitial(context.watch<AuthProvider>()),
-                style: GoogleFonts.poppins(
-                  fontWeight: FontWeight.w700,
-                  color: AppColors.primary,
-                ),
+                style: GoogleFonts.poppins(fontWeight: FontWeight.w700, color: AppColors.primary),
               ),
             ),
           ),
@@ -823,59 +800,72 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Widget _buildSelectionTopBar(NoteProvider noteProvider) {
-    final textColor = AppColors.text(context);
     final inTrash = noteProvider.selectedFolderId == 'trash';
-    final selectedNotes = _currentSelectedNotes(noteProvider);
-    final allPinned = selectedNotes.isNotEmpty &&
-        selectedNotes.every((n) => n.isPinned);
-
     return Container(
       padding: const EdgeInsets.fromLTRB(8, 12, 8, 0),
       child: Row(
         children: [
-          IconButton(
-            onPressed: _clearSelection,
-            icon: const Icon(Icons.close),
-          ),
+          IconButton(onPressed: _clearSelection, icon: const Icon(Icons.close)),
           Expanded(
             child: Text(
               '${_selectedNoteIds.length}',
-              style: GoogleFonts.poppins(
-                fontSize: 18,
-                fontWeight: FontWeight.w600,
-                color: textColor,
-              ),
+              style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w600),
             ),
           ),
           if (inTrash) ...[
             IconButton(
               tooltip: 'Pulihkan',
-              onPressed: () => _restoreSelected(noteProvider),
+              onPressed: () async {
+                final selected = _currentVisibleNotes(noteProvider)
+                    .where((e) => _selectedNoteIds.contains(e.id))
+                    .toList();
+                for (final note in selected) {
+                  await noteProvider.restoreNote(note.id);
+                }
+                _clearSelection();
+              },
               icon: const Icon(Icons.restore),
             ),
             IconButton(
               tooltip: 'Hapus permanen',
-              onPressed: () => _deleteSelectedPermanently(noteProvider),
-              icon: const Icon(
-                Icons.delete_forever,
-                color: Colors.red,
-              ),
+              onPressed: () async {
+                final selected = _currentVisibleNotes(noteProvider)
+                    .where((e) => _selectedNoteIds.contains(e.id))
+                    .toList();
+                for (final note in selected) {
+                  await noteProvider.permanentDelete(note.id);
+                }
+                _clearSelection();
+              },
+              icon: const Icon(Icons.delete_forever, color: Colors.red),
             ),
           ] else ...[
             IconButton(
-              tooltip: allPinned ? 'Lepas sematan' : 'Sematkan',
-              onPressed: () => _togglePinSelected(noteProvider),
-              icon: Icon(
-                allPinned ? Icons.push_pin : Icons.push_pin_outlined,
-              ),
+              tooltip: 'Sematkan / lepas',
+              onPressed: () async {
+                final selected = _currentVisibleNotes(noteProvider)
+                    .where((e) => _selectedNoteIds.contains(e.id))
+                    .toList();
+                final allPinned = selected.isNotEmpty && selected.every((n) => n.isPinned);
+                for (final note in selected) {
+                  await noteProvider.saveNote(note.copyWith(isPinned: !allPinned));
+                }
+                _clearSelection();
+              },
+              icon: const Icon(Icons.push_pin_outlined),
             ),
             IconButton(
               tooltip: 'Hapus',
-              onPressed: () => _deleteSelected(noteProvider),
-              icon: const Icon(
-                Icons.delete_outline,
-                color: Colors.red,
-              ),
+              onPressed: () async {
+                final selected = _currentVisibleNotes(noteProvider)
+                    .where((e) => _selectedNoteIds.contains(e.id))
+                    .toList();
+                for (final note in selected) {
+                  await noteProvider.deleteNote(note.id);
+                }
+                _clearSelection();
+              },
+              icon: const Icon(Icons.delete_outline, color: Colors.red),
             ),
           ],
         ],
@@ -883,102 +873,10 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Widget _buildNotesList(
-      NoteProvider noteProvider,
-      List<NoteModel> notes,
-      List<NoteModel> pinned,
-      List<NoteModel> unpinned,
-      ) {
-    final viewMode = noteProvider.viewMode;
-    final subColor = AppColors.textSecondary(context);
-
-    if (viewMode == 'grid') {
-      return MasonryGridView.count(
-        padding: const EdgeInsets.symmetric(horizontal: 16),
-        crossAxisCount: 2,
-        mainAxisSpacing: 8,
-        crossAxisSpacing: 8,
-        itemCount: notes.length,
-        itemBuilder: (context, index) {
-          final note = notes[index];
-          return NoteCard(
-            note: note,
-            viewMode: 'grid',
-            selected: _selectedNoteIds.contains(note.id),
-            selectionMode: _isSelectionMode,
-            onTap: () => _handleNoteTap(note),
-            onLongPress: () => _handleNoteLongPress(note),
-            onMoreTap: _isSelectionMode
-                ? null
-                : () => _showNoteOptions(context, note),
-          );
-        },
-      );
-    }
-
-    return ListView(
-      padding: const EdgeInsets.symmetric(horizontal: 16),
-      children: [
-        if (pinned.isNotEmpty) ...[
-          Padding(
-            padding: const EdgeInsets.only(bottom: 8),
-            child: Text(
-              'Disematkan',
-              style: GoogleFonts.poppins(
-                fontSize: 12,
-                color: subColor,
-                fontWeight: FontWeight.w500,
-              ),
-            ),
-          ),
-          ...pinned.map(
-                (note) => NoteCard(
-              note: note,
-              viewMode: viewMode,
-              selected: _selectedNoteIds.contains(note.id),
-              selectionMode: _isSelectionMode,
-              onTap: () => _handleNoteTap(note),
-              onLongPress: () => _handleNoteLongPress(note),
-              onMoreTap:
-              _isSelectionMode ? null : () => _showNoteOptions(context, note),
-            ),
-          ),
-          if (unpinned.isNotEmpty)
-            Padding(
-              padding: const EdgeInsets.only(top: 8, bottom: 8),
-              child: Text(
-                'Lainnya',
-                style: GoogleFonts.poppins(
-                  fontSize: 12,
-                  color: subColor,
-                  fontWeight: FontWeight.w500,
-                ),
-              ),
-            ),
-        ],
-        ...unpinned.map(
-              (note) => NoteCard(
-            note: note,
-            viewMode: viewMode,
-            selected: _selectedNoteIds.contains(note.id),
-            selectionMode: _isSelectionMode,
-            onTap: () => _handleNoteTap(note),
-            onLongPress: () => _handleNoteLongPress(note),
-            onMoreTap:
-            _isSelectionMode ? null : () => _showNoteOptions(context, note),
-          ),
-        ),
-        const SizedBox(height: 80),
-      ],
-    );
-  }
-
   Widget _buildEmptyState(String selectedFolderId) {
     final subColor = AppColors.textSecondary(context);
-
     String title = 'Belum ada catatan';
-    String subtitle = 'Tekan + untuk membuat catatan baru';
-
+    String subtitle = 'Tekan tombol + untuk membuat catatan baru';
     if (selectedFolderId == 'locked') {
       title = 'Belum ada catatan terkunci';
       subtitle = 'Catatan yang dikunci akan muncul di sini';
@@ -997,21 +895,122 @@ class _HomeScreenState extends State<HomeScreen> {
             const SizedBox(height: 16),
             Text(
               title,
-              style: GoogleFonts.poppins(
-                fontSize: 16,
-                color: subColor,
-                fontWeight: FontWeight.w600,
-              ),
+              style: GoogleFonts.poppins(fontSize: 16, color: subColor, fontWeight: FontWeight.w600),
             ),
             const SizedBox(height: 8),
             Text(
               subtitle,
-              style: GoogleFonts.poppins(
-                fontSize: 13,
-                color: subColor,
-              ),
+              style: GoogleFonts.poppins(fontSize: 13, color: subColor),
               textAlign: TextAlign.center,
             ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Future<void> _shareNote(NoteModel note) async {
+    try {
+      await ExportService.shareAsText(note);
+    } catch (_) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Gagal membagikan catatan', style: GoogleFonts.poppins()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  Future<void> _toggleLockFromCard(NoteModel note) async {
+    final noteProvider = context.read<NoteProvider>();
+
+    if (note.isLocked) {
+      await noteProvider.saveNote(note.copyWith(isLocked: false));
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Catatan dibuka kuncinya', style: GoogleFonts.poppins()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final hasPin = await SecurityService.hasPin();
+    if (!hasPin) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('Atur PIN terlebih dahulu di Pengaturan', style: GoogleFonts.poppins()),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    await noteProvider.saveNote(note.copyWith(isLocked: true));
+    if (!mounted) return;
+    ScaffoldMessenger.of(context).showSnackBar(
+      SnackBar(
+        content: Text('Catatan berhasil dikunci', style: GoogleFonts.poppins()),
+        behavior: SnackBarBehavior.floating,
+      ),
+    );
+  }
+
+  Future<void> _showColorPickerForNote(NoteModel note) async {
+    await showModalBottomSheet(
+      context: context,
+      backgroundColor: AppColors.bg2(context),
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (sheetContext) => Padding(
+        padding: const EdgeInsets.all(20),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Text(
+              'Warna label',
+              style: GoogleFonts.poppins(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: AppColors.text(context),
+              ),
+            ),
+            const SizedBox(height: 16),
+            Wrap(
+              spacing: 12,
+              runSpacing: 12,
+              children: List.generate(
+                AppColors.noteColors.length,
+                (i) => GestureDetector(
+                  onTap: () async {
+                    await context.read<NoteProvider>().saveNote(note.copyWith(colorIndex: i));
+                    if (!sheetContext.mounted) return;
+                    Navigator.pop(sheetContext);
+                  },
+                  child: Container(
+                    width: 44,
+                    height: 44,
+                    decoration: BoxDecoration(
+                      color: AppColors.noteColors[i],
+                      shape: BoxShape.circle,
+                      border: note.colorIndex == i
+                          ? Border.all(color: AppColors.primary, width: 3)
+                          : Border.all(color: Colors.grey.shade400, width: 1),
+                    ),
+                    child: note.colorIndex == i
+                        ? const Icon(Icons.check, color: Colors.white, size: 20)
+                        : null,
+                  ),
+                ),
+              ),
+            ),
+            const SizedBox(height: 20),
           ],
         ),
       ),
@@ -1046,38 +1045,30 @@ class _HomeScreenState extends State<HomeScreen> {
           if (isInTrash) ...[
             ListTile(
               leading: const Icon(Icons.restore, color: Colors.green),
-              title: Text(
-                'Pulihkan',
-                style: GoogleFonts.poppins(color: textColor),
-              ),
+              title: Text('Pulihkan', style: GoogleFonts.poppins(color: textColor)),
               onTap: () async {
                 await noteProvider.restoreNote(note.id);
                 if (!mounted) return;
                 Navigator.pop(bottomSheetContext);
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Catatan dipulihkan',
-                      style: GoogleFonts.poppins(),
-                    ),
-                    duration: const Duration(seconds: 3),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
               },
             ),
             ListTile(
               leading: const Icon(Icons.delete_forever, color: Colors.red),
-              title: Text(
-                'Hapus Permanen',
-                style: GoogleFonts.poppins(color: Colors.red),
-              ),
+              title: Text('Hapus Permanen', style: GoogleFonts.poppins(color: Colors.red)),
               onTap: () {
                 Navigator.pop(bottomSheetContext);
                 _showPermanentDeleteDialog(context, note);
               },
             ),
           ] else ...[
+            ListTile(
+              leading: Icon(Icons.share_outlined, color: textColor),
+              title: Text('Bagikan', style: GoogleFonts.poppins(color: textColor)),
+              onTap: () {
+                Navigator.pop(bottomSheetContext);
+                _shareNote(note);
+              },
+            ),
             ListTile(
               leading: Icon(
                 note.isPinned ? Icons.push_pin : Icons.push_pin_outlined,
@@ -1099,78 +1090,29 @@ class _HomeScreenState extends State<HomeScreen> {
                 color: textColor,
               ),
               title: Text(
-                note.isLocked ? 'Buka Kunci' : 'Kunci',
+                note.isLocked ? 'Buka kunci' : 'Kunci',
                 style: GoogleFonts.poppins(color: textColor),
               ),
-              onTap: () async {
+              onTap: () {
                 Navigator.pop(bottomSheetContext);
-
-                if (note.isLocked) {
-                  await noteProvider.saveNote(note.copyWith(isLocked: false));
-                  if (!mounted) return;
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Catatan berhasil dibuka kuncinya',
-                        style: GoogleFonts.poppins(),
-                      ),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                final hasPin = await SecurityService.hasPin();
-                if (!mounted) return;
-
-                if (!hasPin) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Atur PIN terlebih dahulu di Pengaturan',
-                        style: GoogleFonts.poppins(),
-                      ),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                await noteProvider.saveNote(note.copyWith(isLocked: true));
-
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Catatan berhasil dikunci',
-                      style: GoogleFonts.poppins(),
-                    ),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
+                _toggleLockFromCard(note);
+              },
+            ),
+            ListTile(
+              leading: Icon(Icons.palette_outlined, color: textColor),
+              title: Text('Warna label', style: GoogleFonts.poppins(color: textColor)),
+              onTap: () {
+                Navigator.pop(bottomSheetContext);
+                _showColorPickerForNote(note);
               },
             ),
             ListTile(
               leading: const Icon(Icons.delete_outline, color: Colors.red),
-              title: Text(
-                'Hapus',
-                style: GoogleFonts.poppins(color: Colors.red),
-              ),
+              title: Text('Hapus', style: GoogleFonts.poppins(color: Colors.red)),
               onTap: () async {
                 await noteProvider.deleteNote(note.id);
                 if (!mounted) return;
                 Navigator.pop(bottomSheetContext);
-                ScaffoldMessenger.of(context).hideCurrentSnackBar();
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Catatan dipindahkan ke sampah',
-                      style: GoogleFonts.poppins(),
-                    ),
-                    duration: const Duration(seconds: 3),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
               },
             ),
           ],
@@ -1191,78 +1133,28 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: bg2,
         title: Text(
           'Hapus Permanen?',
-          style: GoogleFonts.poppins(
-            color: textColor,
-            fontWeight: FontWeight.w600,
-          ),
+          style: GoogleFonts.poppins(color: textColor, fontWeight: FontWeight.w600),
         ),
         content: Text(
           'Catatan ini akan dihapus permanen dan tidak bisa dipulihkan.',
-          style: GoogleFonts.poppins(
-            color: AppColors.textSecondary(context),
-            fontSize: 14,
-          ),
+          style: GoogleFonts.poppins(color: AppColors.textSecondary(context), fontSize: 14),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(
-              'Batal',
-              style: GoogleFonts.poppins(
-                color: AppColors.textSecondary(context),
-              ),
-            ),
-          ),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Batal')),
           TextButton(
             onPressed: () async {
-              try {
-                await noteProvider.permanentDelete(note.id);
-
-                if (!dialogContext.mounted) return;
-                Navigator.pop(dialogContext);
-
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Catatan dihapus permanen',
-                      style: GoogleFonts.poppins(),
-                    ),
-                    duration: const Duration(seconds: 3),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              } catch (e) {
-                if (!dialogContext.mounted) return;
-                Navigator.pop(dialogContext);
-
-                if (!mounted) return;
-                ScaffoldMessenger.of(context).showSnackBar(
-                  SnackBar(
-                    content: Text(
-                      'Gagal menghapus permanen: $e',
-                      style: GoogleFonts.poppins(),
-                    ),
-                    duration: const Duration(seconds: 3),
-                    behavior: SnackBarBehavior.floating,
-                  ),
-                );
-              }
+              await noteProvider.permanentDelete(note.id);
+              if (!dialogContext.mounted) return;
+              Navigator.pop(dialogContext);
             },
-            child: Text(
-              'Hapus Permanen',
-              style: GoogleFonts.poppins(color: Colors.red),
-            ),
+            child: Text('Hapus Permanen', style: GoogleFonts.poppins(color: Colors.red)),
           ),
         ],
       ),
     );
   }
 
-  void _showEmptyTrashDialog(
-      BuildContext context,
-      NoteProvider noteProvider,
-      ) {
+  void _showEmptyTrashDialog(BuildContext context, NoteProvider noteProvider) {
     final bg2 = AppColors.bg2(context);
     final textColor = AppColors.text(context);
 
@@ -1272,63 +1164,24 @@ class _HomeScreenState extends State<HomeScreen> {
         backgroundColor: bg2,
         title: Text(
           'Kosongkan Sampah?',
-          style: GoogleFonts.poppins(
-            color: textColor,
-            fontWeight: FontWeight.w600,
-          ),
+          style: GoogleFonts.poppins(color: textColor, fontWeight: FontWeight.w600),
         ),
         content: Text(
           'Semua catatan di sampah akan dihapus permanen.',
-          style: GoogleFonts.poppins(
-            color: AppColors.textSecondary(context),
-            fontSize: 14,
-          ),
+          style: GoogleFonts.poppins(color: AppColors.textSecondary(context), fontSize: 14),
         ),
         actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(
-              'Batal',
-              style: GoogleFonts.poppins(
-                color: AppColors.textSecondary(context),
-              ),
-            ),
-          ),
+          TextButton(onPressed: () => Navigator.pop(dialogContext), child: const Text('Batal')),
           TextButton(
             onPressed: () async {
               await noteProvider.emptyTrash();
               if (!dialogContext.mounted) return;
               Navigator.pop(dialogContext);
             },
-            child: Text(
-              'Kosongkan',
-              style: GoogleFonts.poppins(color: Colors.red),
-            ),
+            child: Text('Kosongkan', style: GoogleFonts.poppins(color: Colors.red)),
           ),
         ],
       ),
-    );
-  }
-
-  Widget _buildBottomNav() {
-    return BottomNavigationBar(
-      currentIndex: _currentTab,
-      onTap: (index) {
-        _clearSelection();
-        setState(() => _currentTab = index);
-      },
-      items: const [
-        BottomNavigationBarItem(
-          icon: Icon(Icons.sticky_note_2_outlined),
-          activeIcon: Icon(Icons.sticky_note_2),
-          label: 'Catatan',
-        ),
-        BottomNavigationBarItem(
-          icon: Icon(Icons.check_circle_outline),
-          activeIcon: Icon(Icons.check_circle),
-          label: 'Tugas',
-        ),
-      ],
     );
   }
 }
@@ -1356,33 +1209,22 @@ class KeepDrawerTile extends StatelessWidget {
       padding: const EdgeInsets.only(right: 12, bottom: 4),
       child: Material(
         color: selected ? selectedBg : Colors.transparent,
-        borderRadius: const BorderRadius.horizontal(
-          right: Radius.circular(28),
-        ),
+        borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
         child: InkWell(
-          borderRadius: const BorderRadius.horizontal(
-            right: Radius.circular(28),
-          ),
+          borderRadius: const BorderRadius.horizontal(right: Radius.circular(28)),
           onTap: onTap,
           child: Container(
-            padding: const EdgeInsets.symmetric(
-              horizontal: 16,
-              vertical: 12,
-            ),
+            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
             child: Row(
               children: [
-                Icon(
-                  icon,
-                  color: selected ? AppColors.primary : textColor,
-                ),
+                Icon(icon, color: selected ? AppColors.primary : textColor),
                 const SizedBox(width: 16),
                 Expanded(
                   child: Text(
                     title,
                     style: GoogleFonts.poppins(
                       fontSize: 14,
-                      fontWeight:
-                      selected ? FontWeight.w600 : FontWeight.w400,
+                      fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
                       color: selected ? AppColors.primary : textColor,
                     ),
                   ),

@@ -1,110 +1,99 @@
-import 'package:flutter/services.dart';
+import 'dart:convert';
+
+import 'package:flutter/foundation.dart';
 import 'package:flutter_local_notifications/flutter_local_notifications.dart';
-import 'package:timezone/data/latest_all.dart' as tz;
+import 'package:timezone/data/latest.dart' as tz;
 import 'package:timezone/timezone.dart' as tz;
 
-@pragma('vm:entry-point')
-void notificationTapBackground(NotificationResponse response) {}
-
 class NotificationService {
-  static final FlutterLocalNotificationsPlugin _plugin =
+  static final FlutterLocalNotificationsPlugin _notifications =
       FlutterLocalNotificationsPlugin();
-
-  static const AndroidNotificationChannel _channel =
-      AndroidNotificationChannel(
-    'notes_reminder_channel',
-    'Pengingat Tugas',
-    description: 'Notifikasi pengingat untuk tugas',
-    importance: Importance.max,
-  );
-
-  static const MethodChannel _exactAlarmChannel =
-      MethodChannel('notes_app/exact_alarm');
-
   static bool _initialized = false;
+
+  static final ValueNotifier<String?> openedTaskId = ValueNotifier<String?>(null);
 
   static Future<void> init() async {
     if (_initialized) return;
 
     tz.initializeTimeZones();
-
     try {
       tz.setLocalLocation(tz.getLocation('Asia/Jakarta'));
-    } catch (_) {
-      tz.setLocalLocation(tz.UTC);
+    } catch (_) {}
+
+    const android = AndroidInitializationSettings('@mipmap/ic_launcher');
+    const ios = DarwinInitializationSettings();
+    const settings = InitializationSettings(android: android, iOS: ios);
+
+    await _notifications.initialize(
+      settings,
+      onDidReceiveNotificationResponse: _handleNotificationResponse,
+      onDidReceiveBackgroundNotificationResponse: _handleBackgroundNotificationResponse,
+    );
+
+    final details = await _notifications.getNotificationAppLaunchDetails();
+    if (details?.didNotificationLaunchApp == true &&
+        details?.notificationResponse?.payload != null) {
+      _consumePayload(details!.notificationResponse!.payload!);
     }
-
-    const androidSettings =
-        AndroidInitializationSettings('@mipmap/ic_launcher');
-
-    const initSettings = InitializationSettings(
-      android: androidSettings,
-    );
-
-    await _plugin.initialize(
-      initSettings,
-      onDidReceiveNotificationResponse: (details) {},
-      onDidReceiveBackgroundNotificationResponse:
-          notificationTapBackground,
-    );
-
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-
-    await androidPlugin?.createNotificationChannel(_channel);
 
     _initialized = true;
   }
 
-  static Future<void> requestPermissions() async {
-    await init();
-
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-
-    await androidPlugin?.requestNotificationsPermission();
-
-    final canScheduleExact =
-        await androidPlugin?.canScheduleExactNotifications();
-
-    if (canScheduleExact == false) {
-      try {
-        await androidPlugin?.requestExactAlarmsPermission();
-      } catch (_) {
-        await openExactAlarmSettings();
-      }
+  @pragma('vm:entry-point')
+  static void _handleBackgroundNotificationResponse(NotificationResponse response) {
+    if (response.payload != null) {
+      _consumePayload(response.payload!);
     }
   }
 
-  static Future<bool> canScheduleExactAlarms() async {
+  static void _handleNotificationResponse(NotificationResponse response) {
+    if (response.payload != null) {
+      _consumePayload(response.payload!);
+    }
+  }
+
+  static void _consumePayload(String payload) {
+    try {
+      final decoded = jsonDecode(payload);
+      if (decoded is Map && decoded['taskId'] != null) {
+        openedTaskId.value = decoded['taskId'].toString();
+        return;
+      }
+    } catch (_) {}
+
+    if (payload.startsWith('task:')) {
+      openedTaskId.value = payload.replaceFirst('task:', '');
+    }
+  }
+
+  static Future<bool> requestPermissions() async {
     await init();
+    final android = _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    await android?.requestNotificationsPermission();
 
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
+    final ios = _notifications.resolvePlatformSpecificImplementation<
+        IOSFlutterLocalNotificationsPlugin>();
+    await ios?.requestPermissions(alert: true, badge: true, sound: true);
 
-    return await androidPlugin?.canScheduleExactNotifications() ??
-        false;
+    return true;
+  }
+
+  static Future<bool> canScheduleExactAlarms() async {
+    final android = _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    return await android?.canScheduleExactNotifications() ?? true;
   }
 
   static Future<void> openExactAlarmSettings() async {
-    try {
-      await _exactAlarmChannel.invokeMethod(
-        'openExactAlarmSettings',
-      );
-    } catch (_) {}
+    final android = _notifications.resolvePlatformSpecificImplementation<
+        AndroidFlutterLocalNotificationsPlugin>();
+    await android?.requestExactAlarmsPermission();
   }
 
-  static Future<bool> ensureExactAlarmAccess() async {
+  static Future<void> cancelNotification(int id) async {
     await init();
-
-    final allowed = await canScheduleExactAlarms();
-    if (allowed) return true;
-
-    await openExactAlarmSettings();
-    return false;
+    await _notifications.cancel(id);
   }
 
   static Future<void> scheduleNotification({
@@ -112,53 +101,32 @@ class NotificationService {
     required String title,
     required String body,
     required DateTime scheduledAt,
+    String? taskId,
   }) async {
     await init();
 
-    if (!scheduledAt.isAfter(DateTime.now())) return;
-
-    final androidPlugin = _plugin
-        .resolvePlatformSpecificImplementation<
-            AndroidFlutterLocalNotificationsPlugin>();
-
-    final canScheduleExact =
-        await androidPlugin?.canScheduleExactNotifications() ??
-            false;
-
+    final payload = jsonEncode({'taskId': taskId});
     const androidDetails = AndroidNotificationDetails(
-      'notes_reminder_channel',
-      'Pengingat Tugas',
-      channelDescription: 'Notifikasi pengingat untuk tugas',
+      'task_reminders',
+      'Task reminders',
+      channelDescription: 'Reminder notifications for tasks',
       importance: Importance.max,
       priority: Priority.high,
-      icon: '@mipmap/ic_launcher',
-      playSound: true,
-      enableVibration: true,
-      visibility: NotificationVisibility.public,
     );
+    const iosDetails = DarwinNotificationDetails();
+    const details = NotificationDetails(android: androidDetails, iOS: iosDetails);
 
-    const details = NotificationDetails(android: androidDetails);
-
-    await _plugin.zonedSchedule(
+    await _notifications.zonedSchedule(
       id,
       title,
       body,
       tz.TZDateTime.from(scheduledAt, tz.local),
       details,
-      androidScheduleMode: canScheduleExact
-          ? AndroidScheduleMode.exactAllowWhileIdle
-          : AndroidScheduleMode.inexactAllowWhileIdle,
+      payload: payload,
       uiLocalNotificationDateInterpretation:
           UILocalNotificationDateInterpretation.absoluteTime,
-      payload: id.toString(),
+      androidScheduleMode: AndroidScheduleMode.exactAllowWhileIdle,
+      matchDateTimeComponents: null,
     );
-  }
-
-  static Future<void> cancelNotification(int id) async {
-    await _plugin.cancel(id);
-  }
-
-  static Future<void> cancelAll() async {
-    await _plugin.cancelAll();
   }
 }

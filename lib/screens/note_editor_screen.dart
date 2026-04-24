@@ -117,21 +117,35 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     );
   }
 
+  bool _documentHasEmbeds() {
+    final delta = _quillController.document.toDelta();
+    for (final op in delta.toList()) {
+      if (op.data is Map) return true;
+    }
+    return false;
+  }
+
+  bool _noteHasMeaningfulContent() {
+    final title = _titleController.text.trim();
+    final plainText = _quillController.document.toPlainText().trim();
+    return title.isNotEmpty || plainText.isNotEmpty || _documentHasEmbeds();
+  }
+
   Future<void> _saveAndPop() async {
     if (_saved) return;
     _saved = true;
 
+    FocusScope.of(context).unfocus();
+    await Future.delayed(const Duration(milliseconds: 60));
+    if (!mounted) return;
+
     setState(() => _isSaving = true);
 
     try {
-      final title = _titleController.text.trim();
-      final contentJson =
-          jsonEncode(_quillController.document.toDelta().toJson());
-      final plainText = _quillController.document.toPlainText().trim();
+      final contentJson = jsonEncode(_quillController.document.toDelta().toJson());
 
       if (widget.isNew &&
-          title.isEmpty &&
-          plainText.isEmpty &&
+          !_noteHasMeaningfulContent() &&
           _colorIndex == 0 &&
           !_isLocked) {
         if (mounted) Navigator.of(context).pop();
@@ -139,7 +153,7 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
       }
 
       final updated = widget.note.copyWith(
-        title: title,
+        title: _titleController.text.trim(),
         content: contentJson,
         colorIndex: _colorIndex,
         isLocked: _isLocked,
@@ -161,10 +175,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   Future<void> _handleBack() async {
     final title = _titleController.text.trim();
     final plainText = _quillController.document.toPlainText().trim();
+    final hasEmbed = _documentHasEmbeds();
 
     if (widget.isNew &&
         title.isEmpty &&
         plainText.isEmpty &&
+        !hasEmbed &&
         _colorIndex == 0 &&
         !_hasChanges &&
         !_isLocked) {
@@ -289,7 +305,20 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
   void _insertImageToEditor(String url) {
     final index = _quillController.selection.baseOffset;
     final safeIndex = index < 0 ? 0 : index;
-    _quillController.document.insert(safeIndex, BlockEmbed.image(url));
+
+    _quillController.replaceText(
+      safeIndex,
+      0,
+      BlockEmbed.image(url),
+      TextSelection.collapsed(offset: safeIndex + 1),
+    );
+    _quillController.replaceText(
+      safeIndex + 1,
+      0,
+      '\n',
+      TextSelection.collapsed(offset: safeIndex + 2),
+    );
+
     setState(() => _hasChanges = true);
   }
 
@@ -297,13 +326,18 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     final index = _quillController.selection.baseOffset;
     final safeIndex = index < 0 ? 0 : index;
 
-    _quillController.document.insert(
+    _quillController.replaceText(
       safeIndex,
-      BlockEmbed.custom(
-        CustomBlockEmbed(_audioEmbedKey, filePath),
-      ),
+      0,
+      BlockEmbed.custom(CustomBlockEmbed(_audioEmbedKey, filePath)),
+      TextSelection.collapsed(offset: safeIndex + 1),
     );
-    _quillController.document.insert(safeIndex + 1, '\n');
+    _quillController.replaceText(
+      safeIndex + 1,
+      0,
+      '\n',
+      TextSelection.collapsed(offset: safeIndex + 2),
+    );
 
     setState(() => _hasChanges = true);
   }
