@@ -1,22 +1,24 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
-import '../models/note_model.dart';
 import '../models/folder_model.dart';
+import '../models/note_model.dart';
 import '../services/auth_service.dart';
 import '../services/local_storage_service.dart';
 
 class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final AuthService _authService = AuthService();
-  final _uuid = const Uuid();
+  final Uuid _uuid = const Uuid();
 
   List<NoteModel> _notes = [];
   List<FolderModel> _folders = [];
+
   String _selectedFolderId = 'all';
-  String _viewMode = 'list';
+  String _viewMode = 'grid';
   bool _isLoading = false;
   bool _lockedFolderUnlocked = false;
 
@@ -30,8 +32,7 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   List<NoteModel> get notes => _notes;
   List<FolderModel> get folders => _folders;
-  List<FolderModel> get visibleFolders =>
-      _folders.where((f) => !f.isLocked).toList();
+  List<FolderModel> get visibleFolders => _folders.where((f) => !f.isLocked).toList();
 
   String get selectedFolderId => _selectedFolderId;
   String get viewMode => _viewMode;
@@ -39,25 +40,26 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
   bool get lockedFolderUnlocked => _lockedFolderUnlocked;
 
   String get selectedFolderName {
-    if (_selectedFolderId == 'all') return 'Semua';
-    if (_selectedFolderId == 'trash') return 'Baru Dihapus';
+    if (_selectedFolderId == 'all') return 'Catatan';
+    if (_selectedFolderId == 'trash') return 'Sampah';
     if (_selectedFolderId == 'locked') return 'Terkunci';
 
     final folder = _folders.firstWhere(
-      (f) => f.id == _selectedFolderId,
+          (f) => f.id == _selectedFolderId,
       orElse: () => FolderModel(
         id: 'all',
-        name: 'Semua',
+        name: 'Catatan',
         userId: '',
         createdAt: DateTime.now(),
       ),
     );
+
     return folder.name;
   }
 
-  List<NoteModel> get lockedNotes => _notes
-      .where((n) => !n.isDeleted && n.type == 'note' && n.isLocked)
-      .toList();
+  List<NoteModel> get lockedNotes {
+    return _notes.where((n) => !n.isDeleted && n.type == 'note' && n.isLocked).toList();
+  }
 
   List<NoteModel> get filteredNotes {
     if (_selectedFolderId == 'trash') {
@@ -72,33 +74,28 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
     if (_selectedFolderId == 'all') {
       return _notes
           .where(
-            (n) =>
-                !n.isDeleted &&
-                n.type == 'note' &&
-                !n.isLocked,
-          )
+            (n) => !n.isDeleted && n.type == 'note' && !n.isLocked,
+      )
           .toList();
     }
 
     return _notes
         .where(
           (n) =>
-              !n.isDeleted &&
-              n.type == 'note' &&
-              !n.isLocked &&
-              n.folderId == _selectedFolderId,
-        )
+      !n.isDeleted &&
+          n.type == 'note' &&
+          !n.isLocked &&
+          n.folderId == _selectedFolderId,
+    )
         .toList();
   }
 
-  List<NoteModel> get pinnedNotes =>
-      filteredNotes.where((n) => n.isPinned).toList();
+  List<NoteModel> get pinnedNotes => filteredNotes.where((n) => n.isPinned).toList();
+  List<NoteModel> get unpinnedNotes => filteredNotes.where((n) => !n.isPinned).toList();
 
-  List<NoteModel> get unpinnedNotes =>
-      filteredNotes.where((n) => !n.isPinned).toList();
-
-  List<NoteModel> get tasks =>
-      _notes.where((n) => !n.isDeleted && n.type == 'task').toList();
+  List<NoteModel> get tasks {
+    return _notes.where((n) => !n.isDeleted && n.type == 'task').toList();
+  }
 
   void setViewMode(String mode) {
     _viewMode = mode;
@@ -106,9 +103,7 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
   }
 
   void setFolder(String folderId) {
-    final leavingLockedFolder =
-        _selectedFolderId == 'locked' && folderId != 'locked';
-
+    final leavingLockedFolder = _selectedFolderId == 'locked' && folderId != 'locked';
     if (leavingLockedFolder) {
       _lockedFolderUnlocked = false;
     }
@@ -155,9 +150,7 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
           .orderBy('updatedAt', descending: true)
           .snapshots()
           .listen((snapshot) {
-        _notes = snapshot.docs
-            .map((doc) => NoteModel.fromMap(doc.data()))
-            .toList();
+        _notes = snapshot.docs.map((doc) => NoteModel.fromMap(doc.data())).toList();
         notifyListeners();
       });
 
@@ -167,9 +160,8 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
           .collection('folders')
           .snapshots()
           .listen((snapshot) {
-        _folders = snapshot.docs
-            .map((doc) => FolderModel.fromMap(doc.data()))
-            .toList();
+        _folders = snapshot.docs.map((doc) => FolderModel.fromMap(doc.data())).toList()
+          ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
         notifyListeners();
       });
     } finally {
@@ -183,12 +175,12 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
     final folderMaps = LocalStorageService.foldersBox.values.toList();
 
     _notes = noteMaps
-        .map((e) => NoteModel.fromLocalMap(Map<dynamic, dynamic>.from(e)))
+        .map((e) => NoteModel.fromLocalMap(Map<String, dynamic>.from(e)))
         .toList()
       ..sort((a, b) => b.updatedAt.compareTo(a.updatedAt));
 
     _folders = folderMaps
-        .map((e) => FolderModel.fromLocalMap(Map<dynamic, dynamic>.from(e)))
+        .map((e) => FolderModel.fromLocalMap(Map<String, dynamic>.from(e)))
         .toList()
       ..sort((a, b) => a.createdAt.compareTo(b.createdAt));
 
@@ -270,7 +262,7 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
         .collection('users')
         .doc(uid)
         .collection('notes')
-        .doc(note.id)
+        .doc(updated.id)
         .set(updated.toMap());
   }
 
@@ -295,7 +287,10 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
         .doc(uid)
         .collection('notes')
         .doc(noteId)
-        .update({'isDeleted': true, 'updatedAt': Timestamp.now()});
+        .update({
+      'isDeleted': true,
+      'updatedAt': Timestamp.now(),
+    });
   }
 
   Future<void> restoreNote(String noteId) async {
@@ -319,7 +314,10 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
         .doc(uid)
         .collection('notes')
         .doc(noteId)
-        .update({'isDeleted': false, 'updatedAt': Timestamp.now()});
+        .update({
+      'isDeleted': false,
+      'updatedAt': Timestamp.now(),
+    });
   }
 
   Future<void> permanentDelete(String noteId) async {
@@ -340,11 +338,22 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
         .delete();
   }
 
+  Future<void> deleteNotePermanently(String noteId) async {
+    await permanentDelete(noteId);
+  }
+
+  Future<void> deleteNotePermanent(String noteId) async {
+    await permanentDelete(noteId);
+  }
+
   Future<void> togglePin(NoteModel note) async {
     await saveNote(note.copyWith(isPinned: !note.isPinned));
   }
 
-  Future<void> createFolder(String name, {int colorIndex = 0}) async {
+  Future<void> createFolder(
+      String name, {
+        int colorIndex = 0,
+      }) async {
     final uid = _authService.currentUser?.uid ?? 'guest';
     final id = _uuid.v4();
 
@@ -398,13 +407,11 @@ class NoteProvider extends ChangeNotifier with WidgetsBindingObserver {
 
   List<NoteModel> searchNotes(String query) {
     if (query.isEmpty) return filteredNotes;
-    return filteredNotes
-        .where(
-          (n) =>
-              n.title.toLowerCase().contains(query.toLowerCase()) ||
-              n.content.toLowerCase().contains(query.toLowerCase()),
-        )
-        .toList();
+
+    final q = query.toLowerCase();
+    return filteredNotes.where((n) {
+      return n.title.toLowerCase().contains(q) || n.content.toLowerCase().contains(q);
+    }).toList();
   }
 
   @override

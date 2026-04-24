@@ -9,6 +9,8 @@ class TaskModel {
   final bool isCompleted;
   final DateTime? reminderAt;
   final DateTime createdAt;
+  final String categoryId;
+  final String categoryName;
 
   TaskModel({
     required this.id,
@@ -17,6 +19,8 @@ class TaskModel {
     this.isCompleted = false,
     this.reminderAt,
     required this.createdAt,
+    this.categoryId = 'misc',
+    this.categoryName = 'Misc',
   });
 
   Map<String, dynamic> toMap() {
@@ -27,6 +31,8 @@ class TaskModel {
       'isCompleted': isCompleted,
       'reminderAt': reminderAt != null ? Timestamp.fromDate(reminderAt!) : null,
       'createdAt': Timestamp.fromDate(createdAt),
+      'categoryId': categoryId,
+      'categoryName': categoryName,
     };
   }
 
@@ -38,10 +44,12 @@ class TaskModel {
       'isCompleted': isCompleted,
       'reminderAt': reminderAt?.toIso8601String(),
       'createdAt': createdAt.toIso8601String(),
+      'categoryId': categoryId,
+      'categoryName': categoryName,
     };
   }
 
-  factory TaskModel.fromMap(Map<String, dynamic> map) {
+  factory TaskModel.fromMap(Map map) {
     return TaskModel(
       id: map['id'] ?? '',
       title: map['title'] ?? '',
@@ -49,11 +57,13 @@ class TaskModel {
       isCompleted: map['isCompleted'] ?? false,
       reminderAt: _readDate(map['reminderAt']),
       createdAt: _readDate(map['createdAt']) ?? DateTime.now(),
+      categoryId: map['categoryId'] ?? 'misc',
+      categoryName: map['categoryName'] ?? 'Misc',
     );
   }
 
-  factory TaskModel.fromLocalMap(Map<dynamic, dynamic> map) {
-    return TaskModel.fromMap(Map<String, dynamic>.from(map));
+  factory TaskModel.fromLocalMap(Map map) {
+    return TaskModel.fromMap(Map.from(map));
   }
 
   TaskModel copyWith({
@@ -63,6 +73,8 @@ class TaskModel {
     bool? isCompleted,
     Object? reminderAt = _taskReminderUnset,
     DateTime? createdAt,
+    String? categoryId,
+    String? categoryName,
   }) {
     return TaskModel(
       id: id ?? this.id,
@@ -73,6 +85,8 @@ class TaskModel {
           ? this.reminderAt
           : reminderAt as DateTime?,
       createdAt: createdAt ?? this.createdAt,
+      categoryId: categoryId ?? this.categoryId,
+      categoryName: categoryName ?? this.categoryName,
     );
   }
 

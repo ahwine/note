@@ -1,43 +1,46 @@
 import 'package:flutter/material.dart';
 
 class AppColors {
-  // Primary
   static const Color primary = Color(0xFFFFC107);
   static const Color primaryDark = Color(0xFFFFB300);
+  static const Color primaryContainer = Color(0xFFFFE082);
+  static const Color onPrimaryContainer = Color(0xFF2B1D00);
 
-  // Background
-  static const Color bgDark = Color(0xFF121212);
-  static const Color bgDark2 = Color(0xFF1E1E1E);
-  static const Color bgDark3 = Color(0xFF2C2C2C);
-  static const Color bgLight = Color(0xFFF5F5F5);
-  static const Color bgLight2 = Color(0xFFFFFFFF);
-  static const Color bgLight3 = Color(0xFFEEEEEE);
+  static const Color bgDark = Color(0xFF0F1113);
+  static const Color bgDark2 = Color(0xFF171A1D);
+  static const Color bgDark3 = Color(0xFF1F2428);
 
-  // Text
-  static const Color textDark = Color(0xFFFFFFFF);
-  static const Color textDarkSecondary = Color(0xFF9E9E9E);
-  static const Color textLight = Color(0xFF121212);
-  static const Color textLightSecondary = Color(0xFF757575);
+  static const Color bgLight = Color(0xFFFFF8F1);
+  static const Color bgLight2 = Color(0xFFFFFBF7);
+  static const Color bgLight3 = Color(0xFFF7EEDF);
 
-  // Note Label Colors (8 pilihan)
-  static const List<Color> noteColors = [
-    Color(0xFF1E1E1E), // default (dark)
-    Color(0xFFD32F2F), // red
-    Color(0xFFE64A19), // deep orange
-    Color(0xFFF9A825), // amber
-    Color(0xFF388E3C), // green
-    Color(0xFF1565C0), // blue
-    Color(0xFF6A1B9A), // purple
-    Color(0xFF00838F), // teal
-  ];
+  static const Color textDark = Colors.white;
+  static const Color textDarkSecondary = Color(0xFFB0B7BF);
+  static const Color textLight = Color(0xFF1E1B16);
+  static const Color textLightSecondary = Color(0xFF6C6357);
 
-  // Folder icon colors
+  static const Color success = Color(0xFF2E7D32);
+  static const Color error = Color(0xFFD32F2F);
+
+  static const Color outline = Color(0x22000000);
+  static const Color outlineDark = Color(0x22FFFFFF);
+
   static const Color folderYellow = Color(0xFFFFC107);
   static const Color folderPink = Color(0xFFE91E63);
   static const Color folderBlue = Color(0xFF2196F3);
   static const Color folderGreen = Color(0xFF4CAF50);
 
-  // Helper — ambil warna berdasarkan brightness
+  static const List<Color> noteColors = [
+    Color(0xFF171A1D),
+    Color(0xFFFFF8E1),
+    Color(0xFFFFF3E0),
+    Color(0xFFE8F5E9),
+    Color(0xFFE3F2FD),
+    Color(0xFFF3E5F5),
+    Color(0xFFFFEBEE),
+    Color(0xFFE0F7FA),
+  ];
+
   static Color bg(BuildContext context) =>
       Theme.of(context).brightness == Brightness.dark ? bgDark : bgLight;
 
@@ -54,4 +57,14 @@ class AppColors {
       Theme.of(context).brightness == Brightness.dark
           ? textDarkSecondary
           : textLightSecondary;
+
+  static Color surface(BuildContext context) => bg2(context);
+
+  static Color surfaceVariant(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark
+          ? const Color(0xFF24292E)
+          : const Color(0xFFF2E6D5);
+
+  static Color outlineColor(BuildContext context) =>
+      Theme.of(context).brightness == Brightness.dark ? outlineDark : outline;
 }

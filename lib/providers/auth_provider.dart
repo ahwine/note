@@ -1,8 +1,9 @@
-import 'package:flutter/material.dart';
 import 'package:firebase_auth/firebase_auth.dart';
+import 'package:flutter/material.dart';
+
 import '../services/auth_service.dart';
 
-enum AuthStatus { initial, loading, authenticated, unauthenticated, guest }
+enum AuthStatus { initial, loading, authenticated, guest }
 
 class AuthProvider extends ChangeNotifier {
   final AuthService _authService = AuthService();
@@ -21,13 +22,13 @@ class AuthProvider extends ChangeNotifier {
 
   AuthProvider() {
     _authService.authStateChanges.listen((user) {
-      if (_status == AuthStatus.guest) return;
+      _errorMessage = null;
       if (user != null) {
         _user = user;
         _status = AuthStatus.authenticated;
       } else {
         _user = null;
-        _status = AuthStatus.unauthenticated;
+        _status = AuthStatus.guest;
       }
       notifyListeners();
     });
@@ -41,7 +42,6 @@ class AuthProvider extends ChangeNotifier {
     _status = AuthStatus.loading;
     _errorMessage = null;
     notifyListeners();
-
     try {
       await _authService.registerWithEmail(
         email: email,
@@ -51,7 +51,7 @@ class AuthProvider extends ChangeNotifier {
       return true;
     } on FirebaseAuthException catch (e) {
       _errorMessage = _getErrorMessage(e.code);
-      _status = AuthStatus.unauthenticated;
+      _status = AuthStatus.guest;
       notifyListeners();
       return false;
     }
@@ -64,13 +64,12 @@ class AuthProvider extends ChangeNotifier {
     _status = AuthStatus.loading;
     _errorMessage = null;
     notifyListeners();
-
     try {
       await _authService.loginWithEmail(email: email, password: password);
       return true;
     } on FirebaseAuthException catch (e) {
       _errorMessage = _getErrorMessage(e.code);
-      _status = AuthStatus.unauthenticated;
+      _status = AuthStatus.guest;
       notifyListeners();
       return false;
     }
@@ -80,18 +79,23 @@ class AuthProvider extends ChangeNotifier {
     _status = AuthStatus.loading;
     _errorMessage = null;
     notifyListeners();
-
     try {
       final result = await _authService.signInWithGoogle();
       if (result == null) {
-        _status = AuthStatus.unauthenticated;
+        _status = AuthStatus.guest;
         notifyListeners();
         return false;
       }
       return true;
     } on FirebaseAuthException catch (e) {
       _errorMessage = _getErrorMessage(e.code);
-      _status = AuthStatus.unauthenticated;
+      _status = AuthStatus.guest;
+      notifyListeners();
+      return false;
+    } catch (_) {
+      _errorMessage =
+          'Login Google gagal. Cek konfigurasi Firebase, SHA-1 Android, dan akun Google di project Firebase.';
+      _status = AuthStatus.guest;
       notifyListeners();
       return false;
     }
@@ -114,7 +118,6 @@ class AuthProvider extends ChangeNotifier {
   }) async {
     _errorMessage = null;
     notifyListeners();
-
     try {
       await _authService.changePassword(
         currentPassword: currentPassword,
@@ -135,10 +138,9 @@ class AuthProvider extends ChangeNotifier {
   Future<bool> deleteAccount({String? currentPassword}) async {
     _errorMessage = null;
     notifyListeners();
-
     try {
       await _authService.deleteAccount(currentPassword: currentPassword);
-      _status = AuthStatus.unauthenticated;
+      _status = AuthStatus.guest;
       _user = null;
       notifyListeners();
       return true;
@@ -156,12 +158,14 @@ class AuthProvider extends ChangeNotifier {
   void continueAsGuest() {
     _status = AuthStatus.guest;
     _user = null;
+    _errorMessage = null;
     notifyListeners();
   }
 
   Future<void> signOut() async {
     await _authService.signOut();
-    _status = AuthStatus.unauthenticated;
+    _status = AuthStatus.guest;
+    _user = null;
     notifyListeners();
   }
 
@@ -171,7 +175,7 @@ class AuthProvider extends ChangeNotifier {
         return 'Email tidak ditemukan.';
       case 'wrong-password':
       case 'invalid-credential':
-        return 'Password lama salah.';
+        return 'Email atau password salah.';
       case 'email-already-in-use':
         return 'Email sudah terdaftar.';
       case 'invalid-email':
@@ -184,18 +188,6 @@ class AuthProvider extends ChangeNotifier {
         return 'Silakan login ulang lalu coba lagi.';
       case 'no-current-user':
         return 'User tidak sedang login.';
-      case 'missing-email':
-        return 'Akun ini tidak mendukung operasi ini.';
-      case 'password-change-not-supported':
-        return 'Akun Google tidak bisa mengganti password dari aplikasi ini.';
-      case 'missing-password':
-        return 'Password wajib diisi.';
-      case 'google-reauth-cancelled':
-        return 'Verifikasi Google dibatalkan.';
-      case 'google-email-mismatch':
-        return 'Email verifikasi tidak sesuai. Pilih akun Google yang terdaftar di aplikasi.';
-      case 'delete-account-not-supported':
-        return 'Jenis akun ini belum didukung untuk hapus akun.';
       default:
         return 'Terjadi kesalahan. Coba lagi.';
     }

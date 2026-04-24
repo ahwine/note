@@ -2,10 +2,8 @@ import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:provider/provider.dart';
 
-import '../providers/note_provider.dart';
 import '../constants/app_colors.dart';
-import '../services/security_service.dart';
-import 'note_unlock_dialog.dart';
+import '../providers/note_provider.dart';
 
 class FolderDropdown extends StatelessWidget {
   const FolderDropdown({super.key});
@@ -13,263 +11,180 @@ class FolderDropdown extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final noteProvider = context.watch<NoteProvider>();
-    final textColor = AppColors.text(context);
+    final text = AppColors.text(context);
+    final sub = AppColors.textSecondary(context);
 
-    return GestureDetector(
+    return InkWell(
+      borderRadius: BorderRadius.circular(18),
       onTap: () => _showFolderSheet(context, noteProvider),
-      child: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Flexible(
-            child: Text(
-              noteProvider.selectedFolderName,
-              overflow: TextOverflow.ellipsis,
-              style: GoogleFonts.poppins(
-                fontSize: 26,
-                fontWeight: FontWeight.w700,
-                color: textColor,
+      child: Ink(
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+        decoration: BoxDecoration(
+          color: AppColors.bg2(context),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(
+            color: (Theme.of(context).brightness == Brightness.dark
+                    ? Colors.white
+                    : Colors.black)
+                .withOpacity(.06),
+          ),
+        ),
+        child: Row(
+          mainAxisSize: MainAxisSize.min,
+          children: [
+            Icon(Icons.folder_outlined, size: 18, color: AppColors.primaryDark),
+            const SizedBox(width: 10),
+            Flexible(
+              child: Text(
+                noteProvider.selectedFolderName,
+                overflow: TextOverflow.ellipsis,
+                style: GoogleFonts.poppins(
+                  fontWeight: FontWeight.w600,
+                  color: text,
+                ),
               ),
             ),
-          ),
-          const SizedBox(width: 6),
-          Icon(
-            Icons.arrow_drop_down,
-            color: textColor,
-            size: 28,
-          ),
-        ],
+            const SizedBox(width: 8),
+            Icon(Icons.keyboard_arrow_down_rounded, color: sub),
+          ],
+        ),
       ),
     );
   }
 
-  void _showFolderSheet(BuildContext context, NoteProvider noteProvider) {
-    final textColor = AppColors.text(context);
-    final bg2 = AppColors.bg2(context);
+  Future<void> _showFolderSheet(BuildContext context, NoteProvider provider) async {
+    final controller = TextEditingController();
 
-    showModalBottomSheet(
+    await showModalBottomSheet<void>(
       context: context,
-      backgroundColor: bg2,
-      shape: const RoundedRectangleBorder(
-        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
-      ),
+      isScrollControlled: true,
+      showDragHandle: true,
       builder: (sheetContext) {
-        return Column(
-          mainAxisSize: MainAxisSize.min,
-          children: [
-            const SizedBox(height: 12),
-            Container(
-              width: 40,
-              height: 4,
+        final text = AppColors.text(sheetContext);
+        final sub = AppColors.textSecondary(sheetContext);
+
+        Widget folderTile({
+          required String id,
+          required String title,
+          required IconData icon,
+          Color? iconColor,
+        }) {
+          final selected = provider.selectedFolderId == id;
+          return ListTile(
+            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(18)),
+            leading: Container(
+              padding: const EdgeInsets.all(10),
               decoration: BoxDecoration(
-                color: AppColors.textSecondary(context),
-                borderRadius: BorderRadius.circular(2),
+                color: (iconColor ?? AppColors.primary).withOpacity(.14),
+                borderRadius: BorderRadius.circular(14),
+              ),
+              child: Icon(icon, color: iconColor ?? AppColors.primaryDark),
+            ),
+            title: Text(
+              title,
+              style: GoogleFonts.poppins(
+                fontWeight: FontWeight.w600,
+                color: text,
               ),
             ),
-            const SizedBox(height: 16),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 20),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Text(
-                    'Folder',
-                    style: GoogleFonts.poppins(
-                      fontSize: 18,
-                      fontWeight: FontWeight.w600,
-                      color: textColor,
-                    ),
+            trailing: selected
+                ? const Icon(Icons.check_circle_rounded, color: AppColors.primaryDark)
+                : null,
+            onTap: () {
+              provider.setFolder(id);
+              Navigator.pop(sheetContext);
+            },
+          );
+        }
+
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 4,
+            bottom: MediaQuery.of(sheetContext).viewInsets.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Pilih folder',
+                  style: GoogleFonts.poppins(
+                    fontSize: 20,
+                    fontWeight: FontWeight.w700,
+                    color: text,
                   ),
-                  TextButton.icon(
-                    onPressed: () {
-                      Navigator.pop(sheetContext);
-                      _showNewFolderDialog(context, noteProvider);
-                    },
-                    icon: const Icon(
-                      Icons.add,
-                      color: AppColors.primary,
-                      size: 18,
-                    ),
-                    label: Text(
-                      'Baru',
-                      style: GoogleFonts.poppins(
-                        color: AppColors.primary,
-                        fontSize: 14,
-                      ),
+                ),
+              ),
+              const SizedBox(height: 6),
+              Align(
+                alignment: Alignment.centerLeft,
+                child: Text(
+                  'Atur tampilan catatan berdasarkan folder.',
+                  style: GoogleFonts.poppins(color: sub),
+                ),
+              ),
+              const SizedBox(height: 16),
+              folderTile(id: 'all', title: 'Semua catatan', icon: Icons.grid_view_rounded),
+              folderTile(
+                id: 'trash',
+                title: 'Baru dihapus',
+                icon: Icons.delete_outline_rounded,
+                iconColor: Colors.redAccent,
+              ),
+              folderTile(
+                id: 'locked',
+                title: 'Terkunci',
+                icon: Icons.lock_outline_rounded,
+                iconColor: Colors.orangeAccent,
+              ),
+              ...provider.visibleFolders.map(
+                (folder) => folderTile(
+                  id: folder.id,
+                  title: folder.name,
+                  icon: Icons.folder_copy_outlined,
+                  iconColor: AppColors.noteColors[
+                      folder.colorIndex % AppColors.noteColors.length],
+                ),
+              ),
+              const SizedBox(height: 20),
+              TextField(
+                controller: controller,
+                textInputAction: TextInputAction.done,
+                decoration: const InputDecoration(
+                  prefixIcon: Icon(Icons.create_new_folder_outlined),
+                  hintText: 'Buat folder baru',
+                ),
+                onSubmitted: (_) async {
+                  final name = controller.text.trim();
+                  if (name.isEmpty) return;
+                  await provider.createFolder(name);
+                  if (sheetContext.mounted) Navigator.pop(sheetContext);
+                },
+              ),
+              const SizedBox(height: 14),
+              Row(
+                children: [
+                  Expanded(
+                    child: FilledButton.icon(
+                      onPressed: () async {
+                        final name = controller.text.trim();
+                        if (name.isEmpty) return;
+                        await provider.createFolder(name);
+                        if (sheetContext.mounted) Navigator.pop(sheetContext);
+                      },
+                      icon: const Icon(Icons.add_rounded),
+                      label: const Text('Tambah folder'),
                     ),
                   ),
                 ],
               ),
-            ),
-            const SizedBox(height: 8),
-            _FolderItem(
-              icon: Icons.notes,
-              label: 'Semua',
-              isSelected: noteProvider.selectedFolderId == 'all',
-              onTap: () {
-                noteProvider.setFolder('all');
-                Navigator.pop(sheetContext);
-              },
-            ),
-            _FolderItem(
-              icon: Icons.lock_outline,
-              label: 'Terkunci',
-              isSelected: noteProvider.selectedFolderId == 'locked',
-              onTap: () async {
-                Navigator.pop(sheetContext);
-
-                if (noteProvider.lockedFolderUnlocked) {
-                  noteProvider.setFolder('locked');
-                  return;
-                }
-
-                final hasPin = await SecurityService.hasPin();
-                if (!context.mounted) return;
-
-                if (!hasPin) {
-                  ScaffoldMessenger.of(context).showSnackBar(
-                    SnackBar(
-                      content: Text(
-                        'Atur PIN terlebih dahulu di Pengaturan',
-                        style: GoogleFonts.poppins(),
-                      ),
-                      behavior: SnackBarBehavior.floating,
-                    ),
-                  );
-                  return;
-                }
-
-                final unlocked = await showDialog<bool>(
-                  context: context,
-                  builder: (_) => const NoteUnlockDialog(),
-                );
-
-                if (unlocked == true) {
-                  noteProvider.unlockLockedFolderSession();
-                }
-              },
-            ),
-            _FolderItem(
-              icon: Icons.delete_outline,
-              label: 'Baru Dihapus',
-              isSelected: noteProvider.selectedFolderId == 'trash',
-              onTap: () {
-                noteProvider.setFolder('trash');
-                Navigator.pop(sheetContext);
-              },
-            ),
-            if (noteProvider.visibleFolders.isNotEmpty) ...[
-              Divider(color: Theme.of(context).dividerColor, height: 24),
-              ...noteProvider.visibleFolders.map(
-                (folder) => _FolderItem(
-                  icon: Icons.folder_outlined,
-                  label: folder.name,
-                  isSelected: noteProvider.selectedFolderId == folder.id,
-                  color: AppColors.noteColors[
-                      folder.colorIndex.clamp(0, AppColors.noteColors.length - 1)],
-                  onTap: () {
-                    noteProvider.setFolder(folder.id);
-                    Navigator.pop(sheetContext);
-                  },
-                ),
-              ),
             ],
-            const SizedBox(height: 24),
-          ],
+          ),
         );
       },
-    );
-  }
-
-  void _showNewFolderDialog(BuildContext context, NoteProvider noteProvider) {
-    final controller = TextEditingController();
-    final textColor = AppColors.text(context);
-    final bg2 = AppColors.bg2(context);
-
-    showDialog(
-      context: context,
-      builder: (dialogContext) => AlertDialog(
-        backgroundColor: bg2,
-        title: Text(
-          'Folder Baru',
-          style: GoogleFonts.poppins(color: textColor),
-        ),
-        content: TextField(
-          controller: controller,
-          autofocus: true,
-          style: TextStyle(color: textColor),
-          decoration: const InputDecoration(
-            hintText: 'Nama folder',
-          ),
-        ),
-        actions: [
-          TextButton(
-            onPressed: () => Navigator.pop(dialogContext),
-            child: Text(
-              'Batal',
-              style: GoogleFonts.poppins(
-                color: AppColors.textSecondary(context),
-              ),
-            ),
-          ),
-          TextButton(
-            onPressed: () {
-              if (controller.text.trim().isNotEmpty) {
-                noteProvider.createFolder(controller.text.trim());
-                Navigator.pop(dialogContext);
-              }
-            },
-            child: Text(
-              'Buat',
-              style: GoogleFonts.poppins(color: AppColors.primary),
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-}
-
-class _FolderItem extends StatelessWidget {
-  final IconData icon;
-  final String label;
-  final bool isSelected;
-  final VoidCallback onTap;
-  final Color? color;
-
-  const _FolderItem({
-    required this.icon,
-    required this.label,
-    required this.isSelected,
-    required this.onTap,
-    this.color,
-  });
-
-  @override
-  Widget build(BuildContext context) {
-    final textColor = AppColors.text(context);
-
-    return ListTile(
-      onTap: onTap,
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: (color ?? AppColors.primary).withValues(alpha: 0.15),
-          borderRadius: BorderRadius.circular(10),
-        ),
-        child: Icon(icon, color: color ?? AppColors.primary, size: 20),
-      ),
-      title: Text(
-        label,
-        style: GoogleFonts.poppins(
-          color: isSelected ? AppColors.primary : textColor,
-          fontSize: 15,
-          fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-        ),
-      ),
-      trailing: isSelected
-          ? const Icon(Icons.check, color: AppColors.primary, size: 18)
-          : null,
     );
   }
 }

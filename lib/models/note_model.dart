@@ -1,5 +1,8 @@
 import 'package:cloud_firestore/cloud_firestore.dart';
 
+const Object _noteCoverUnset = Object();
+const Object _noteReminderUnset = Object();
+
 class NoteModel {
   final String id;
   final String title;
@@ -14,6 +17,7 @@ class NoteModel {
   final DateTime updatedAt;
   final DateTime? reminderAt;
   final bool isDeleted;
+  final bool isArchived;
   final String type;
 
   NoteModel({
@@ -30,6 +34,7 @@ class NoteModel {
     required this.updatedAt,
     this.reminderAt,
     this.isDeleted = false,
+    this.isArchived = false,
     this.type = 'note',
   });
 
@@ -48,6 +53,7 @@ class NoteModel {
       'updatedAt': Timestamp.fromDate(updatedAt),
       'reminderAt': reminderAt != null ? Timestamp.fromDate(reminderAt!) : null,
       'isDeleted': isDeleted,
+      'isArchived': isArchived,
       'type': type,
     };
   }
@@ -67,11 +73,12 @@ class NoteModel {
       'updatedAt': updatedAt.toIso8601String(),
       'reminderAt': reminderAt?.toIso8601String(),
       'isDeleted': isDeleted,
+      'isArchived': isArchived,
       'type': type,
     };
   }
 
-  factory NoteModel.fromMap(Map<String, dynamic> map) {
+  factory NoteModel.fromMap(Map map) {
     return NoteModel(
       id: map['id'] ?? '',
       title: map['title'] ?? '',
@@ -86,12 +93,13 @@ class NoteModel {
       updatedAt: _readDate(map['updatedAt']) ?? DateTime.now(),
       reminderAt: _readDate(map['reminderAt']),
       isDeleted: map['isDeleted'] ?? false,
+      isArchived: map['isArchived'] ?? false,
       type: map['type'] ?? 'note',
     );
   }
 
-  factory NoteModel.fromLocalMap(Map<dynamic, dynamic> map) {
-    return NoteModel.fromMap(Map<String, dynamic>.from(map));
+  factory NoteModel.fromLocalMap(Map map) {
+    return NoteModel.fromMap(Map.from(map));
   }
 
   NoteModel copyWith({
@@ -103,11 +111,12 @@ class NoteModel {
     int? colorIndex,
     bool? isPinned,
     bool? isLocked,
-    String? coverImageUrl,
+    Object? coverImageUrl = _noteCoverUnset,
     DateTime? createdAt,
     DateTime? updatedAt,
-    DateTime? reminderAt,
+    Object? reminderAt = _noteReminderUnset,
     bool? isDeleted,
+    bool? isArchived,
     String? type,
   }) {
     return NoteModel(
@@ -119,11 +128,16 @@ class NoteModel {
       colorIndex: colorIndex ?? this.colorIndex,
       isPinned: isPinned ?? this.isPinned,
       isLocked: isLocked ?? this.isLocked,
-      coverImageUrl: coverImageUrl ?? this.coverImageUrl,
+      coverImageUrl: identical(coverImageUrl, _noteCoverUnset)
+          ? this.coverImageUrl
+          : coverImageUrl as String?,
       createdAt: createdAt ?? this.createdAt,
       updatedAt: updatedAt ?? this.updatedAt,
-      reminderAt: reminderAt ?? this.reminderAt,
+      reminderAt: identical(reminderAt, _noteReminderUnset)
+          ? this.reminderAt
+          : reminderAt as DateTime?,
       isDeleted: isDeleted ?? this.isDeleted,
+      isArchived: isArchived ?? this.isArchived,
       type: type ?? this.type,
     );
   }

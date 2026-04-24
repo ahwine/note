@@ -1,43 +1,62 @@
 import 'dart:async';
-import 'package:flutter/material.dart';
+
 import 'package:cloud_firestore/cloud_firestore.dart';
+import 'package:flutter/material.dart';
 import 'package:uuid/uuid.dart';
 
+import '../models/task_category_model.dart';
 import '../models/task_model.dart';
 import '../services/auth_service.dart';
-import '../services/notification_service.dart';
 import '../services/local_storage_service.dart';
+import '../services/notification_service.dart';
 
 class TaskProvider extends ChangeNotifier {
   final FirebaseFirestore _firestore = FirebaseFirestore.instance;
   final AuthService _authService = AuthService();
-  final _uuid = const Uuid();
+  final Uuid _uuid = const Uuid();
 
   List<TaskModel> _tasks = [];
+  List<TaskCategoryModel> _categories = [];
   bool _isLoading = false;
+
   StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _tasksSub;
+  StreamSubscription<QuerySnapshot<Map<String, dynamic>>>? _categoriesSub;
 
   TaskProvider() {
-    _loadGuestTasks();
+    _loadGuestData();
   }
 
   List<TaskModel> get tasks => _tasks;
-  List<TaskModel> get pendingTasks =>
-      _tasks.where((t) => !t.isCompleted).toList();
-  List<TaskModel> get completedTasks =>
-      _tasks.where((t) => t.isCompleted).toList();
+  List<TaskCategoryModel> get categories => _categories;
   bool get isLoading => _isLoading;
+
+  List<TaskCategoryModel> get sortedCategories => List<TaskCategoryModel>.from(_categories)
+    ..sort((a, b) => a.order.compareTo(b.order));
+
+  List<TaskModel> tasksForCategory(String categoryId) {
+    return _tasks.where((t) => t.categoryId == categoryId).toList();
+  }
+
+  List<TaskModel> pendingForCategory(String categoryId) {
+    return tasksForCategory(categoryId).where((t) => !t.isCompleted).toList();
+  }
+
+  List<TaskModel> completedForCategory(String categoryId) {
+    return tasksForCategory(categoryId).where((t) => t.isCompleted).toList();
+  }
+
+  int get completedCount => _tasks.where((t) => t.isCompleted).length;
 
   Future<void> loadTasks() async {
     final uid = _authService.currentUser?.uid;
-
     _isLoading = true;
     notifyListeners();
 
     await _tasksSub?.cancel();
+    await _categoriesSub?.cancel();
 
     if (uid == null) {
-      await _loadGuestTasks();
+      await _loadGuestData();
       _isLoading = false;
       notifyListeners();
       return;
@@ -50,21 +69,46 @@ class TaskProvider extends ChangeNotifier {
         .orderBy('createdAt', descending: true)
         .snapshots()
         .listen((snapshot) {
-      _tasks = snapshot.docs
-          .map((doc) => TaskModel.fromMap(doc.data()))
-          .toList();
-      _isLoading = false;
+      _tasks =
+          snapshot.docs.map((doc) => TaskModel.fromMap(doc.data())).toList();
       notifyListeners();
     });
+
+    _categoriesSub = _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('task_categories')
+        .orderBy('order')
+        .snapshots()
+        .listen((snapshot) {
+      _categories = snapshot.docs
+          .map((doc) => TaskCategoryModel.fromMap(doc.data()))
+          .toList();
+      if (_categories.isEmpty) {
+        _ensureDefaultCategory();
+      }
+      notifyListeners();
+    });
+
+    _isLoading = false;
+    notifyListeners();
   }
 
-  Future<void> _loadGuestTasks() async {
+  Future<void> _loadGuestData() async {
     final taskMaps = LocalStorageService.tasksBox.values.toList();
+    final categoryMaps = LocalStorageService.taskCategoriesBox.values.toList();
 
-    _tasks = taskMaps
-        .map((e) => TaskModel.fromLocalMap(Map<dynamic, dynamic>.from(e)))
-        .toList()
+    _tasks = taskMaps.map((e) => TaskModel.fromLocalMap(Map.from(e))).toList()
       ..sort((a, b) => b.createdAt.compareTo(a.createdAt));
+
+    _categories = categoryMaps
+        .map((e) => TaskCategoryModel.fromMap(Map.from(e)))
+        .toList()
+      ..sort((a, b) => a.order.compareTo(b.order));
+
+    if (_categories.isEmpty) {
+      await _ensureDefaultCategory();
+    }
 
     notifyListeners();
   }
@@ -72,47 +116,207 @@ class TaskProvider extends ChangeNotifier {
   Future<void> _persistGuestTasks() async {
     final box = LocalStorageService.tasksBox;
     await box.clear();
-
     for (final task in _tasks) {
       await box.put(task.id, task.toLocalMap());
     }
   }
 
+  Future<void> _persistGuestCategories() async {
+    final box = LocalStorageService.taskCategoriesBox;
+    await box.clear();
+    for (final category in _categories) {
+      await box.put(category.id, category.toMap());
+    }
+  }
+
+  Future<void> _ensureDefaultCategory() async {
+    if (_categories.any((e) => e.id == 'misc')) return;
+    _categories.insert(
+      0,
+      TaskCategoryModel(
+        id: 'misc',
+        name: 'Misc',
+        userId: _authService.currentUser?.uid ?? 'guest',
+        order: 0,
+        createdAt: DateTime.now(),
+      ),
+    );
+    if (_authService.currentUser == null) {
+      await _persistGuestCategories();
+    } else {
+      final uid = _authService.currentUser!.uid;
+      await _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('task_categories')
+          .doc('misc')
+          .set(_categories.first.toMap());
+    }
+  }
+
+  Future<TaskCategoryModel> createCategory(String name) async {
+    final uid = _authService.currentUser?.uid ?? 'guest';
+    final category = TaskCategoryModel(
+      id: _uuid.v4(),
+      name: name.trim(),
+      userId: uid,
+      order: _categories.length,
+      createdAt: DateTime.now(),
+    );
+
+    if (uid == 'guest') {
+      _categories.add(category);
+      await _persistGuestCategories();
+      notifyListeners();
+      return category;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('task_categories')
+        .doc(category.id)
+        .set(category.toMap());
+    return category;
+  }
+
+  Future<void> renameCategory(TaskCategoryModel category, String newName) async {
+    final uid = _authService.currentUser?.uid;
+    final updated = category.copyWith(name: newName.trim());
+
+    if (uid == null) {
+      final index = _categories.indexWhere((e) => e.id == category.id);
+      if (index != -1) {
+        _categories[index] = updated;
+        _tasks = _tasks
+            .map((t) => t.categoryId == category.id
+                ? t.copyWith(categoryName: updated.name)
+                : t)
+            .toList();
+        await _persistGuestCategories();
+        await _persistGuestTasks();
+        notifyListeners();
+      }
+      return;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('task_categories')
+        .doc(category.id)
+        .update({'name': updated.name});
+
+    final tasksToUpdate = _tasks.where((t) => t.categoryId == category.id);
+    final batch = _firestore.batch();
+    for (final task in tasksToUpdate) {
+      final ref = _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tasks')
+          .doc(task.id);
+      batch.update(ref, {'categoryName': updated.name});
+    }
+    await batch.commit();
+  }
+
+  Future<void> deleteCategory(TaskCategoryModel category) async {
+    if (category.id == 'misc') return;
+
+    final uid = _authService.currentUser?.uid;
+    final fallback = _categories.firstWhere(
+      (e) => e.id == 'misc',
+      orElse: () => TaskCategoryModel(
+        id: 'misc',
+        name: 'Misc',
+        userId: uid ?? 'guest',
+        order: 0,
+        createdAt: DateTime.now(),
+      ),
+    );
+
+    if (uid == null) {
+      _categories.removeWhere((e) => e.id == category.id);
+      _tasks = _tasks
+          .map((t) => t.categoryId == category.id
+              ? t.copyWith(categoryId: fallback.id, categoryName: fallback.name)
+              : t)
+          .toList();
+      await _persistGuestCategories();
+      await _persistGuestTasks();
+      notifyListeners();
+      return;
+    }
+
+    await _firestore
+        .collection('users')
+        .doc(uid)
+        .collection('task_categories')
+        .doc(category.id)
+        .delete();
+
+    final tasksToUpdate = _tasks.where((t) => t.categoryId == category.id);
+    final batch = _firestore.batch();
+    for (final task in tasksToUpdate) {
+      final ref = _firestore
+          .collection('users')
+          .doc(uid)
+          .collection('tasks')
+          .doc(task.id);
+      batch.update(ref, {
+        'categoryId': fallback.id,
+        'categoryName': fallback.name,
+      });
+    }
+    await batch.commit();
+  }
+
   Future<TaskModel> createTask({
     required String title,
     DateTime? reminderAt,
+    String categoryId = 'misc',
   }) async {
     final uid = _authService.currentUser?.uid ?? 'guest';
-    final id = _uuid.v4();
     final now = DateTime.now();
+    final category = _categories.firstWhere(
+      (e) => e.id == categoryId,
+      orElse: () => TaskCategoryModel(
+        id: 'misc',
+        name: 'Misc',
+        userId: uid,
+        order: 0,
+        createdAt: now,
+      ),
+    );
 
     final task = TaskModel(
-      id: id,
-      title: title,
+      id: _uuid.v4(),
+      title: title.trim(),
       userId: uid,
       reminderAt: reminderAt,
       createdAt: now,
+      categoryId: category.id,
+      categoryName: category.name,
     );
 
-    if (uid != 'guest') {
+    if (uid == 'guest') {
+      _tasks.insert(0, task);
+      await _persistGuestTasks();
+      notifyListeners();
+    } else {
       await _firestore
           .collection('users')
           .doc(uid)
           .collection('tasks')
-          .doc(id)
+          .doc(task.id)
           .set(task.toMap());
-    } else {
-      _tasks.insert(0, task);
-      await _persistGuestTasks();
-      notifyListeners();
     }
 
     await _scheduleReminderIfNeeded(
-      taskId: id,
-      title: title,
+      taskId: task.id,
+      title: task.title,
       reminderAt: reminderAt,
     );
-
     return task;
   }
 
@@ -140,7 +344,6 @@ class TaskProvider extends ChangeNotifier {
 
   Future<void> deleteTask(String taskId) async {
     final uid = _authService.currentUser?.uid;
-
     await NotificationService.cancelNotification(taskId.hashCode);
 
     if (uid == null) {
@@ -163,7 +366,6 @@ class TaskProvider extends ChangeNotifier {
     final updated = task.copyWith(reminderAt: reminderAt);
 
     await NotificationService.cancelNotification(task.id.hashCode);
-
     await _scheduleReminderIfNeeded(
       taskId: task.id,
       title: task.title,
@@ -186,8 +388,7 @@ class TaskProvider extends ChangeNotifier {
         .collection('tasks')
         .doc(task.id)
         .update({
-      'reminderAt':
-          reminderAt != null ? Timestamp.fromDate(reminderAt) : null,
+      'reminderAt': reminderAt != null ? Timestamp.fromDate(reminderAt) : null,
     });
   }
 
@@ -201,10 +402,7 @@ class TaskProvider extends ChangeNotifier {
     }
 
     await NotificationService.requestPermissions();
-
-    final exactAllowed =
-        await NotificationService.canScheduleExactAlarms();
-
+    final exactAllowed = await NotificationService.canScheduleExactAlarms();
     if (!exactAllowed) {
       await NotificationService.openExactAlarmSettings();
       return;
@@ -218,17 +416,17 @@ class TaskProvider extends ChangeNotifier {
     );
   }
 
-  List<TaskModel> searchTasks(String query) {
-    if (query.isEmpty) return _tasks;
-    return _tasks
-        .where((t) =>
-            t.title.toLowerCase().contains(query.toLowerCase()))
-        .toList();
+  List<TaskModel> searchTasks(String query, {String? categoryId}) {
+    final source = categoryId == null ? _tasks : tasksForCategory(categoryId);
+    if (query.trim().isEmpty) return source;
+    final q = query.toLowerCase();
+    return source.where((t) => t.title.toLowerCase().contains(q)).toList();
   }
 
   @override
   void dispose() {
     _tasksSub?.cancel();
+    _categoriesSub?.cancel();
     super.dispose();
   }
 }

@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:google_fonts/google_fonts.dart';
+
 import '../constants/app_colors.dart';
 import '../services/security_service.dart';
 
@@ -11,10 +12,9 @@ class NoteUnlockDialog extends StatefulWidget {
 }
 
 class _NoteUnlockDialogState extends State<NoteUnlockDialog> {
-  final TextEditingController _pinController = TextEditingController();
-
+  final _pinController = TextEditingController();
   bool _isLoading = false;
-  bool _triedBiometric = false;
+  bool _obscure = true;
   String? _errorText;
 
   @override
@@ -24,22 +24,17 @@ class _NoteUnlockDialogState extends State<NoteUnlockDialog> {
   }
 
   Future<void> _tryBiometricFirst() async {
-    final biometricEnabled = await SecurityService.isBiometricEnabled();
-    if (!biometricEnabled || _triedBiometric) return;
+    final enabled = await SecurityService.isBiometricEnabled();
+    if (!enabled || !mounted) return;
 
-    _triedBiometric = true;
-
-    final ok = await SecurityService.authenticateWithBiometric();
+    final ok = await SecurityService.authenticateWithBiometric(
+      reason: 'Buka catatan terkunci',
+    );
     if (!mounted) return;
-
-    if (ok) {
-      Navigator.pop(context, true);
-    }
+    if (ok) Navigator.of(context).pop(true);
   }
 
-  Future<void> _submitPin() async {
-    if (_isLoading) return;
-
+  Future<void> _submit() async {
     setState(() {
       _isLoading = true;
       _errorText = null;
@@ -48,97 +43,86 @@ class _NoteUnlockDialogState extends State<NoteUnlockDialog> {
     final ok = await SecurityService.verifyPin(_pinController.text.trim());
 
     if (!mounted) return;
-
     if (ok) {
-      Navigator.pop(context, true);
+      Navigator.of(context).pop(true);
       return;
     }
 
     setState(() {
       _isLoading = false;
-      _errorText = 'PIN salah';
+      _errorText = 'PIN tidak sesuai';
     });
   }
 
   @override
-  void dispose() {
-    _pinController.dispose();
-    super.dispose();
-  }
-
-  @override
   Widget build(BuildContext context) {
-    final textColor = AppColors.text(context);
-    final subColor = AppColors.textSecondary(context);
+    final text = AppColors.text(context);
+    final sub = AppColors.textSecondary(context);
 
     return AlertDialog(
-      backgroundColor: AppColors.bg2(context),
       title: Text(
-        'Catatan Terkunci',
-        style: GoogleFonts.poppins(
-          color: textColor,
-          fontWeight: FontWeight.w600,
-        ),
+        'Buka folder terkunci',
+        style: GoogleFonts.poppins(fontWeight: FontWeight.w700),
       ),
       content: Column(
         mainAxisSize: MainAxisSize.min,
         children: [
-          Text(
-            'Masukkan PIN atau gunakan biometrik untuk membuka catatan.',
-            style: GoogleFonts.poppins(
-              color: subColor,
-              fontSize: 13,
+          Container(
+            height: 72,
+            width: 72,
+            decoration: BoxDecoration(
+              color: AppColors.primary.withOpacity(.16),
+              shape: BoxShape.circle,
             ),
+            child: const Icon(
+              Icons.lock_open_rounded,
+              color: AppColors.primaryDark,
+              size: 32,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Text(
+            'Masukkan PIN untuk mengakses catatan terkunci.',
+            textAlign: TextAlign.center,
+            style: GoogleFonts.poppins(color: sub),
           ),
           const SizedBox(height: 16),
           TextField(
             controller: _pinController,
             keyboardType: TextInputType.number,
-            obscureText: true,
+            obscureText: _obscure,
             maxLength: 6,
-            style: GoogleFonts.poppins(color: textColor),
             decoration: InputDecoration(
-              hintText: 'Masukkan PIN',
-              errorText: _errorText,
               counterText: '',
+              hintText: 'PIN',
+              errorText: _errorText,
+              prefixIcon: const Icon(Icons.pin_outlined),
+              suffixIcon: IconButton(
+                onPressed: () => setState(() => _obscure = !_obscure),
+                icon: Icon(_obscure ? Icons.visibility_off : Icons.visibility),
+              ),
             ),
-            onSubmitted: (_) => _submitPin(),
+            onSubmitted: (_) => _submit(),
           ),
         ],
       ),
       actions: [
         TextButton(
-          onPressed: () => Navigator.pop(context, false),
+          onPressed: _isLoading ? null : () => Navigator.of(context).pop(false),
           child: Text(
             'Batal',
-            style: GoogleFonts.poppins(color: subColor),
+            style: GoogleFonts.poppins(color: sub),
           ),
         ),
-        TextButton(
-          onPressed: _isLoading ? null : _tryBiometricFirst,
-          child: Text(
-            'Biometrik',
-            style: GoogleFonts.poppins(color: AppColors.primary),
-          ),
-        ),
-        TextButton(
-          onPressed: _isLoading ? null : _submitPin,
+        FilledButton(
+          onPressed: _isLoading ? null : _submit,
           child: _isLoading
-              ? SizedBox(
+              ? const SizedBox(
                   width: 18,
                   height: 18,
-                  child: CircularProgressIndicator(
-                    strokeWidth: 2,
-                    color: AppColors.primary,
-                  ),
+                  child: CircularProgressIndicator(strokeWidth: 2),
                 )
-              : Text(
-                  'Buka',
-                  style: GoogleFonts.poppins(
-                    color: AppColors.primary,
-                    fontWeight: FontWeight.w600,
-                  ),
-                ),
+              : const Text('Buka'),
         ),
       ],
     );
