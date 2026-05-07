@@ -1,15 +1,11 @@
-import 'dart:async';
 import 'dart:convert';
-import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:flutter/material.dart';
 import 'package:flutter_staggered_grid_view/flutter_staggered_grid_view.dart';
 import 'package:google_fonts/google_fonts.dart';
 import 'package:image_picker/image_picker.dart';
-import 'package:path_provider/path_provider.dart';
 import 'package:provider/provider.dart';
-import 'package:record/record.dart';
 import 'package:uuid/uuid.dart';
 
 import '../constants/app_colors.dart';
@@ -162,19 +158,6 @@ class _HomeScreenState extends State<HomeScreen> {
     );
   }
 
-  Future<File> _persistAudioLocally(String tempPath) async {
-    final docsDir = await getApplicationDocumentsDirectory();
-    final voiceDir = Directory('${docsDir.path}/voice_notes');
-    if (!await voiceDir.exists()) {
-      await voiceDir.create(recursive: true);
-    }
-
-    final ext = tempPath.contains('.') ? tempPath.split('.').last : 'm4a';
-    final savedPath = '${voiceDir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.$ext';
-    final sourceFile = File(tempPath);
-    return sourceFile.copy(savedPath);
-  }
-
   Future<void> _createTextNote() async {
     final note = _blankNote();
     if (!mounted) return;
@@ -187,164 +170,158 @@ class _HomeScreenState extends State<HomeScreen> {
   }
 
   Future<void> _createImageNote() async {
-    final picker = ImagePicker();
-    final image = await picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
-    if (image == null) return;
-    final bytes = await image.readAsBytes();
-    final base64Str = base64Encode(bytes);
-    final dataUrl = 'data:image/jpeg;base64,$base64Str';
-    final content = jsonEncode([
-      {'insert': {'image': dataUrl}},
-      {'insert': '\n'},
-    ]);
-    final note = _blankNote(content: content, coverImageUrl: dataUrl);
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
-    );
-    if (!mounted) return;
-    await context.read<NoteProvider>().loadNotes();
+    try {
+      final picker = ImagePicker();
+      final image = await picker.pickImage(
+        source: ImageSource.gallery,
+        imageQuality: 70,
+        maxWidth: 1600,
+      );
+
+      if (image == null) return;
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Memproses gambar...',
+            style: GoogleFonts.poppins(),
+          ),
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 30),
+        ),
+      );
+
+      final bytes = await image.readAsBytes();
+      final base64Str = base64Encode(bytes);
+      final dataUrl = 'data:image/jpeg;base64,$base64Str';
+      final content = jsonEncode([
+        {
+          'insert': {'image': dataUrl}
+        },
+        {'insert': '\n'},
+      ]);
+
+      final note = _blankNote(
+        content: content,
+        coverImageUrl: dataUrl,
+      );
+
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NoteEditorScreen(
+            note: note,
+            isNew: true,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+      await context.read<NoteProvider>().loadNotes();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).hideCurrentSnackBar();
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Gagal menambahkan gambar: $e',
+            style: GoogleFonts.poppins(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _createDrawingNote() async {
-    final Uint8List? imageBytes = await Navigator.push<Uint8List>(
-      context,
-      MaterialPageRoute(builder: (_) => const DrawingScreen()),
-    );
-    if (imageBytes == null) return;
-    final dataUrl = 'data:image/png;base64,${base64Encode(imageBytes)}';
-    final content = jsonEncode([
-      {'insert': {'image': dataUrl}},
-      {'insert': '\n'},
-    ]);
-    final note = _blankNote(content: content, coverImageUrl: dataUrl);
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
-    );
-    if (!mounted) return;
-    await context.read<NoteProvider>().loadNotes();
+    try {
+      final Uint8List? imageBytes = await Navigator.push<Uint8List>(
+        context,
+        MaterialPageRoute(builder: (_) => const DrawingScreen()),
+      );
+
+      if (imageBytes == null) return;
+
+      final dataUrl = 'data:image/png;base64,${base64Encode(imageBytes)}';
+      final content = jsonEncode([
+        {
+          'insert': {'image': dataUrl}
+        },
+        {'insert': '\n'},
+      ]);
+
+      final note = _blankNote(
+        content: content,
+        coverImageUrl: dataUrl,
+      );
+
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NoteEditorScreen(
+            note: note,
+            isNew: true,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+      await context.read<NoteProvider>().loadNotes();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Gagal membuat drawing note: $e',
+            style: GoogleFonts.poppins(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _createAudioNote() async {
-    final recorder = AudioRecorder();
-    final hasPermission = await recorder.hasPermission();
-    if (!hasPermission) return;
-
-    if (!mounted) return;
-    String? audioPath;
-    await showModalBottomSheet<void>(
-      context: context,
-      backgroundColor: Colors.transparent,
-      builder: (sheetContext) {
-        bool recording = false;
-        Duration elapsed = Duration.zero;
-        final timerNotifier = ValueNotifier<int>(0);
-        Timer? timer;
-
-        Future<void> start() async {
-          final dir = await getTemporaryDirectory();
-          final path = '${dir.path}/voice_${DateTime.now().millisecondsSinceEpoch}.m4a';
-          await recorder.start(const RecordConfig(), path: path);
-          recording = true;
-          audioPath = path;
-          timer = Timer.periodic(const Duration(seconds: 1), (_) {
-            elapsed += const Duration(seconds: 1);
-            timerNotifier.value++;
-          });
-        }
-
-        Future<void> stop() async {
-          timer?.cancel();
-          await recorder.stop();
-          if (sheetContext.mounted) Navigator.pop(sheetContext);
-        }
-
-        return StatefulBuilder(builder: (context, setSheetState) {
-          return Container(
-            decoration: BoxDecoration(
-              color: AppColors.bg2(context),
-              borderRadius: const BorderRadius.vertical(top: Radius.circular(28)),
-            ),
-            padding: const EdgeInsets.fromLTRB(20, 18, 20, 28),
-            child: ValueListenableBuilder<int>(
-              valueListenable: timerNotifier,
-              builder: (_, __, ___) {
-                final mm = elapsed.inMinutes.toString().padLeft(2, '0');
-                final ss = (elapsed.inSeconds % 60).toString().padLeft(2, '0');
-                return Column(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Text('Rekam audio', style: GoogleFonts.poppins(fontSize: 18, fontWeight: FontWeight.w700)),
-                    const SizedBox(height: 16),
-                    Text('$mm:$ss', style: GoogleFonts.poppins(fontSize: 28, fontWeight: FontWeight.w800)),
-                    const SizedBox(height: 20),
-                    Row(
-                      children: [
-                        Expanded(
-                          child: OutlinedButton(
-                            onPressed: () async {
-                              timer?.cancel();
-                              if (recording) await recorder.stop();
-                              if (sheetContext.mounted) Navigator.pop(sheetContext);
-                            },
-                            child: const Text('Batal'),
-                          ),
-                        ),
-                        const SizedBox(width: 10),
-                        Expanded(
-                          child: FilledButton(
-                            onPressed: () async {
-                              if (!recording) {
-                                await start();
-                                setSheetState(() {});
-                              } else {
-                                await stop();
-                              }
-                            },
-                            child: Text(recording ? 'Selesai' : 'Mulai'),
-                          ),
-                        ),
-                      ],
-                    ),
-                  ],
-                );
-              },
-            ),
-          );
-        });
-      },
-    );
-
-    if (audioPath == null) return;
-
-    final savedAudio = await _persistAudioLocally(audioPath!);
     try {
-      final tempFile = File(audioPath!);
-      if (await tempFile.exists()) {
-        await tempFile.delete();
-      }
-    } catch (_) {}
+      final note = _blankNote();
 
-    final content = jsonEncode([
-      {
-        'insert': {
-          'notes-audio': savedAudio.path,
-          'duration': 60,
-        }
-      },
-      {'insert': '\n'},
-    ]);
-    final note = _blankNote(content: content);
-    if (!mounted) return;
-    await Navigator.push(
-      context,
-      MaterialPageRoute(builder: (_) => NoteEditorScreen(note: note, isNew: true)),
-    );
-    if (!mounted) return;
-    await context.read<NoteProvider>().loadNotes();
+      if (!mounted) return;
+
+      await Navigator.push(
+        context,
+        MaterialPageRoute(
+          builder: (_) => NoteEditorScreen(
+            note: note,
+            isNew: true,
+            openVoiceRecorderOnStart: true,
+          ),
+        ),
+      );
+
+      if (!mounted) return;
+      await context.read<NoteProvider>().loadNotes();
+    } catch (e) {
+      if (!mounted) return;
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(
+            'Gagal membuka voice note: $e',
+            style: GoogleFonts.poppins(),
+          ),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
   }
 
   Future<void> _selectDrawerFolder(String folderId) async {

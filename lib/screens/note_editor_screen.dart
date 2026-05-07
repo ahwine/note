@@ -24,11 +24,13 @@ import 'drawing_screen.dart';
 class NoteEditorScreen extends StatefulWidget {
   final NoteModel note;
   final bool isNew;
+  final bool openVoiceRecorderOnStart;
 
   const NoteEditorScreen({
     super.key,
     required this.note,
     this.isNew = false,
+    this.openVoiceRecorderOnStart = false,
   });
 
   @override
@@ -78,6 +80,15 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
 
     _quillController.addListener(_onContentChanged);
     _titleController.addListener(_onContentChanged);
+
+    _hasChanges = widget.isNew && _documentHasEmbeds();
+
+    if (widget.openVoiceRecorderOnStart) {
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await _showVoiceRecorderSheet();
+      });
+    }
   }
 
   void _onContentChanged() {
@@ -191,7 +202,12 @@ class _NoteEditorScreenState extends State<NoteEditorScreen> {
     if (!_hasChanges &&
         _colorIndex == widget.note.colorIndex &&
         _isLocked == widget.note.isLocked) {
-      if (mounted) Navigator.of(context).pop();
+      if (widget.isNew && _noteHasMeaningfulContent()) {
+        await _saveAndPop();
+      } else {
+        if (mounted) Navigator.of(context).pop();
+      }
+
       return;
     }
 
@@ -1448,7 +1464,40 @@ class _AudioEmbedBuilder extends EmbedBuilder {
 
   @override
   Widget build(BuildContext context, EmbedContext embedContext) {
-    final audioPath = embedContext.node.value.data as String;
+    final data = embedContext.node.value.data;
+    String audioPath = '';
+
+    if (data is String) {
+      audioPath = data;
+    } else if (data is Map) {
+      audioPath = (data[keyName] ?? data['path'] ?? data['audioPath'] ?? '')
+          .toString();
+    } else if (data != null) {
+      audioPath = data.toString();
+    }
+
+    if (audioPath.isEmpty) {
+      return Container(
+        margin: const EdgeInsets.symmetric(vertical: 8),
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: Colors.red.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(14),
+          border: Border.all(
+            color: Colors.red.withValues(alpha: 0.24),
+          ),
+        ),
+        child: Text(
+          'Voice note tidak dapat dibaca',
+          style: GoogleFonts.poppins(
+            color: AppColors.text(context),
+            fontSize: 13,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      );
+    }
+
     return _AudioPlayerCard(audioPath: audioPath);
   }
 }
